@@ -3,9 +3,11 @@
   <PropertyGroup>
     <!-- net9.0-windows (not plain net9.0) so the heavy P/Invoke surface does not
          produce CA1416 platform-compatibility noise on every Win32 call.
-         1809 = 10.0.17763.0 is the floor stated in README section 1. -->
+         Deliberately NOT net9.0-windows10.0.x: that pulls in the CsWinRT
+         projections (large ref pack, slower startup) and we only need classic
+         Win32. The 1809 floor from README section 1 is enforced at runtime
+         instead, by OsGuard. -->
     <TargetFramework>net9.0-windows</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
 
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

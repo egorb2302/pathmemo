@@ -46,8 +46,10 @@ internal sealed record VolumeInfo(
             // on every property. Skipping is correct; we cannot scan what is not mounted.
             if (!drive.IsReady) continue;
 
-            var root = drive.RootDirectory.FullName;   // "C:\"
-            var letter = root.TrimEnd('\', '/');       // "C:"
+            var root = drive.RootDirectory.FullName;              // e.g. C: with a trailing separator
+            // TrimEndingDirectorySeparator deliberately refuses to trim a root path,
+            // so "C:" + separator stays as-is. Slice the drive spec instead.
+            var letter = root.Length >= 2 && root[1] == ':' ? root[..2] : root;
 
             ReadVolumeStrings(root, out var strings, out var serial);
             var (total, free) = ReadSpace(root);

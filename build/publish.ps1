@@ -14,7 +14,10 @@ param(
     [ValidateSet('Release', 'Debug')]
     [string] $Configuration = 'Release',
 
-    [switch] $Trimmed
+    # Trimming is ON by default: measured 16.1 MB vs 77.3 MB at P0, and the
+    # dependency set is chosen precisely so that trimming stays safe (no
+    # reflection-heavy packages - README section 18).
+    [switch] $NoTrim
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,7 +38,7 @@ $publishArgs = @(
     '-o', $outDir
 )
 
-if ($Trimmed) {
+if (-not $NoTrim) {
     $publishArgs += '-p:PublishTrimmed=true'
     $publishArgs += '-p:TrimMode=partial'
 }

@@ -50,3 +50,55 @@ internal static partial class Kernel32
         Span<char> lpszVolumeName,
         int cchBufferLength);
 }
+
+internal static partial class Kernel32Extra
+{
+    private const string Dll = "kernel32.dll";
+
+    internal const uint InvalidFileSize = 0xFFFFFFFF;
+
+    /// <summary>
+    /// Physical bytes on the volume: cluster-rounded, and reduced for sparse or
+    /// NTFS-compressed files. This is the number that adds up to "used space"
+    /// (README section 3.1).
+    /// </summary>
+    [LibraryImport(Dll, EntryPoint = "GetCompressedFileSizeW", SetLastError = true)]
+    internal static unsafe partial uint GetCompressedFileSize(char* lpFileName, out uint lpFileSizeHigh);
+
+    [LibraryImport(Dll, EntryPoint = "CreateFileW", SetLastError = true,
+        StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint CreateFile(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        nint lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        nint hTemplateFile);
+
+    [LibraryImport(Dll, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseHandle(nint hObject);
+
+    [LibraryImport(Dll, EntryPoint = "DeviceIoControl", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool DeviceIoControl(
+        nint hDevice,
+        uint dwIoControlCode,
+        void* lpInBuffer,
+        uint nInBufferSize,
+        void* lpOutBuffer,
+        uint nOutBufferSize,
+        out uint lpBytesReturned,
+        nint lpOverlapped);
+
+    internal const uint GenericRead = 0x80000000;
+    internal const uint FileShareRead = 0x00000001;
+    internal const uint FileShareWrite = 0x00000002;
+    internal const uint FileShareDelete = 0x00000004;
+    internal const uint OpenExisting = 3;
+    internal const uint FileFlagBackupSemantics = 0x02000000;
+    internal const uint FileFlagOpenReparsePoint = 0x00200000;
+
+    internal const uint IoctlStorageQueryProperty = 0x002D1400;
+}

@@ -27,6 +27,14 @@
     <IsTrimmable>true</IsTrimmable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Everything in this assembly is internal: it is an application, not a library.
+         The test project needs to reach the scanner and snapshot types directly. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>PathMemo.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <!-- P0 deliberately has zero package references so the first build cannot be
        blocked by a dependency API surprise. System.CommandLine and
        Spectre.Console are added in P1, verified against the restored package. -->
