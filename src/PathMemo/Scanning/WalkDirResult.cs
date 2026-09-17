@@ -17,6 +17,9 @@ internal sealed class WalkDirResult
     /// <summary>Enumeration failed; the subtree under this node is unknown.</summary>
     internal bool Failed;
 
+    /// <summary>Entries with more than one hard link, by entry index ascending; null when none.</summary>
+    internal HardlinkRef[]? Links;
+
     /// <summary>
     /// Which worker's name blob <see cref="RawEntry.NameOffset"/> refers to. Workers intern
     /// into their own blob to avoid contending on a shared table; the builder merges them.

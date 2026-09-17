@@ -21,7 +21,17 @@ internal struct RawEntry
     internal uint Mtime;
     internal uint Attributes;
     internal NodeFlags Flags;
+
+    /// <summary>
+    /// Hard link count, or 0 when it was not looked up (files under the threshold).
+    /// When it is above 1 the file id is in the lister's <see cref="DirectoryLister.PendingLinks"/>,
+    /// kept apart so the million entries that have one link pay nothing for it.
+    /// </summary>
+    internal byte LinkCount;
 }
+
+/// <summary>A multi-link file's identity: which entry of the directory, and its 128-bit id.</summary>
+internal readonly record struct HardlinkRef(int EntryIndex, ulong IdLow, ulong IdHigh);
 
 /// <summary>
 /// Enumerates one directory level, projecting each entry directly from the
@@ -66,6 +76,10 @@ internal sealed class DirectoryLister
 
     private readonly FileSystemEnumerable<RawEntry>.FindTransform _transform;
     private readonly bool _resolveAllocatedSize;
+    private List<RawEntry>? _into;
+
+    /// <summary>Multi-link files seen by the last <see cref="TryList"/>, in entry order.</summary>
+    internal List<HardlinkRef> PendingLinks { get; } = new(8);
 
     internal DirectoryLister(NameBlobBuilder blob, byte blobId, bool resolveAllocatedSize)
     {
@@ -89,6 +103,8 @@ internal sealed class DirectoryLister
     {
         error = null;
         into.Clear();
+        PendingLinks.Clear();
+        _into = into;
 
         try
         {
@@ -101,6 +117,10 @@ internal sealed class DirectoryLister
         {
             error = Classify(directory, ex);
             return false;
+        }
+        finally
+        {
+            _into = null;
         }
     }
 
@@ -125,9 +145,26 @@ internal sealed class DirectoryLister
         var untracked = (flags & (NodeFlags.Reparse | NodeFlags.CloudOnly)) != 0;
 
         var allocated = untracked || isDirectory ? 0 : logical;
+        byte linkCount = 0;
+        ulong idLow = 0, idHigh = 0;
 
         if (_resolveAllocatedSize && !isDirectory && !untracked && logical > 0)
+        {
             allocated = QueryAllocatedSize(entry.Directory, entry.FileName, logical);
+
+            // A file id needs a handle, which is too dear per file but cheap for the few
+            // percent of files above 1 MB - and those are the ones whose double counting
+            // would move a total (README section 3.2).
+            if (logical >= HardlinkThreshold)
+            {
+                QueryLinks(entry.Directory, entry.FileName, out linkCount, out idLow, out idHigh);
+
+                // The transform runs just before the caller appends this entry, so the
+                // list's current count is this entry's index.
+                if (linkCount > 1 && _into is { } into)
+                    PendingLinks.Add(new HardlinkRef(into.Count, idLow, idHigh));
+            }
+        }
 
         if (allocated < logical - (logical >> 4)) flags |= NodeFlags.Sparse;
 
@@ -139,7 +176,110 @@ internal sealed class DirectoryLister
             Mtime = SnapshotTime.FromDateTime(entry.LastWriteTimeUtc.UtcDateTime),
             Attributes = (uint)attributes,
             Flags = flags,
+            LinkCount = linkCount,
         };
+    }
+
+    /// <summary>Files at or above this size get their hard link count resolved in walk mode.</summary>
+    internal const long HardlinkThreshold = 1L << 20;
+
+    /// <summary>
+    /// Opens the file for attributes only (no data access, reparse points not followed)
+    /// and reads its link count; the file id is fetched only when there is more than
+    /// one link. Failure leaves the count at 0, meaning "unknown", never "one".
+    /// </summary>
+    internal static unsafe void QueryLinks(
+        ReadOnlySpan<char> directory, ReadOnlySpan<char> name,
+        out byte linkCount, out ulong idLow, out ulong idHigh)
+    {
+        linkCount = 0;
+        idLow = 0;
+        idHigh = 0;
+
+        var rented = ComposePath(directory, name);
+        Span<char> buffer = rented;
+
+        try
+        {
+            nint handle;
+            fixed (char* p = buffer)
+            {
+                handle = Kernel32Extra.CreateFile(p, Kernel32Extra.FileReadAttributes,
+                    Kernel32Extra.FileShareRead | Kernel32Extra.FileShareWrite | Kernel32Extra.FileShareDelete,
+                    0, Kernel32Extra.OpenExisting,
+                    Kernel32Extra.FileFlagBackupSemantics | Kernel32Extra.FileFlagOpenReparsePoint, 0);
+            }
+
+            if (handle == -1 || handle == 0) return;
+
+            try
+            {
+                FileStandardInfo standard;
+                if (!Kernel32Extra.GetFileInformationByHandleEx(handle, Kernel32Extra.FileStandardInfo,
+                        &standard, (uint)sizeof(FileStandardInfo)))
+                    return;
+
+                linkCount = (byte)Math.Min(standard.NumberOfLinks, 255u);
+                if (standard.NumberOfLinks <= 1) return;
+
+                FileIdInfo id;
+                if (Kernel32Extra.GetFileInformationByHandleEx(handle, Kernel32Extra.FileIdInfo,
+                        &id, (uint)sizeof(FileIdInfo)))
+                {
+                    idLow = id.FileIdLow;
+                    idHigh = id.FileIdHigh;
+                }
+                else
+                {
+                    linkCount = 0;      // a count without an identity cannot be deduplicated
+                }
+            }
+            finally
+            {
+                Kernel32Extra.CloseHandle(handle);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Joins directory and name into a NUL-terminated path in a pooled buffer, with the
+    /// <c>\\?\</c> prefix once MAX_PATH is exceeded. The caller returns the array.
+    /// </summary>
+    private static char[] ComposePath(ReadOnlySpan<char> directory, ReadOnlySpan<char> name)
+    {
+        const string LongPrefix = @"\\?\";
+
+        var needsPrefix = directory.Length + 1 + name.Length >= 255
+                       && !directory.StartsWith(LongPrefix);
+
+        var length = (needsPrefix ? LongPrefix.Length : 0)
+                   + directory.Length + 1 + name.Length + 1;   // + separator + NUL
+
+        var rented = System.Buffers.ArrayPool<char>.Shared.Rent(Math.Max(length, 512));
+        Span<char> buffer = rented;
+
+        var at = 0;
+        if (needsPrefix)
+        {
+            LongPrefix.AsSpan().CopyTo(buffer);
+            at += LongPrefix.Length;
+        }
+
+        directory.CopyTo(buffer[at..]);
+        at += directory.Length;
+
+        if (at > 0 && buffer[at - 1] != Path.DirectorySeparatorChar)
+            buffer[at++] = Path.DirectorySeparatorChar;
+
+        name.CopyTo(buffer[at..]);
+        at += name.Length;
+        buffer[at] = '\0';
+
+        return rented;
     }
 
     /// <summary>

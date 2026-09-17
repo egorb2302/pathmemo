@@ -131,6 +131,7 @@ internal sealed class WalkScanner : IScanner
 
             var entries = buffer.ToArray();
             var subdirIds = new int[entries.Length];
+            if (lister.PendingLinks.Count > 0) result.Links = [.. lister.PendingLinks];
             long bytes = 0;
 
             for (var i = 0; i < entries.Length; i++)

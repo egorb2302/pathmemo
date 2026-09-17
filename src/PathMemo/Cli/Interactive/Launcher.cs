@@ -91,7 +91,9 @@ internal static class Launcher
     {
         ClearScreen();
         Console.WriteLine();
-        Console.WriteLine("  Scanning. This takes about a minute for a full drive.");
+        Console.WriteLine(Elevation.IsElevated
+            ? "  Scanning the $MFT. A full drive takes a few seconds."
+            : "  Scanning. This takes about a minute for a full drive without administrator rights.");
         Console.WriteLine("  Ctrl+C stops it and keeps what was found so far.");
         Console.WriteLine();
 

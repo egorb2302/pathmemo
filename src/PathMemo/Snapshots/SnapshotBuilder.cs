@@ -49,6 +49,12 @@ internal static class SnapshotBuilder
         var next = 0;
         var roots = new int[rootDirIds.Length];
 
+        // Hard link owners, keyed by (volume, 128-bit file id). Only entries the lister
+        // found to have more than one link are keyed, so this stays small (README
+        // section 3.2). Breadth-first emission makes the shallowest name the owner:
+        // System32\foo.dll owns, WinSxS\...\foo.dll is the alias.
+        var owners = new Dictionary<(byte Volume, ulong Low, ulong High), int>();
+
         for (var v = 0; v < rootDirIds.Length; v++)
         {
             var dirId = rootDirIds[v];
@@ -83,6 +89,9 @@ internal static class SnapshotBuilder
             firstChild[node] = next;
             childCount[node] = result.Entries.Length;
 
+            var links = result.Links;
+            var nextLink = 0;
+
             for (var i = 0; i < result.Entries.Length; i++)
             {
                 var entry = result.Entries[i];
@@ -98,8 +107,15 @@ internal static class SnapshotBuilder
                 mtime[index] = entry.Mtime;
                 attributes[index] = entry.Attributes;
                 flags[index] = entry.Flags;
-                linkCount[index] = 1;
+                linkCount[index] = entry.LinkCount == 0 ? (byte)1 : entry.LinkCount;
                 volumeIndex[index] = volume;
+
+                if (links is not null && nextLink < links.Length && links[nextLink].EntryIndex == i)
+                {
+                    var link = links[nextLink++];
+                    if (!owners.TryAdd((volume, link.IdLow, link.IdHigh), index))
+                        flags[index] |= NodeFlags.HardlinkAlias;
+                }
 
                 var subdirId = result.SubdirIds[i];
                 if (subdirId >= 0)
@@ -113,18 +129,6 @@ internal static class SnapshotBuilder
             // not "everything the scan produced" plus "everything the snapshot needs".
             results[dirId] = null;
             dirs[dirId] = null!;
-        }
-
-        // Breadth-first emission guarantees child index > parent index, so one reverse
-        // pass rolls every subtree total up to its parent.
-        for (var i = total - 1; i >= 1; i--)
-        {
-            var p = parent[i];
-            if (p == NodeStore.NoNode) continue;
-
-            allocated[p] += allocated[i];
-            logical[p] += logical[i];
-            fileCount[p] += (flags[i] & NodeFlags.Directory) != 0 ? fileCount[i] : 1;
         }
 
         var store = new NodeStore
@@ -145,7 +149,8 @@ internal static class SnapshotBuilder
             Roots = roots,
         };
 
-        MarkSelfData(store, selfDataPrefix);
+        TreeAssembly.Aggregate(store);
+        TreeAssembly.MarkSelfData(store, selfDataPrefix);
         return store;
     }
 
@@ -158,68 +163,5 @@ internal static class SnapshotBuilder
             if (result is { Failed: false }) total += result.Entries.Length;
         }
         return total;
-    }
-
-    /// <summary>
-    /// Flags pathmemo's own data directory. It is shown in the tree like anything else -
-    /// the tool accounts for itself - but is never offered as a deletion target
-    /// (README section 4.6, threat T16).
-    /// </summary>
-    /// <remarks>
-    /// Descends segment by segment from the matching volume root rather than calling
-    /// GetPath on every directory, which would be O(directories * depth).
-    /// </remarks>
-    private static void MarkSelfData(NodeStore store, string dataDirectory)
-    {
-        var node = FindNode(store, dataDirectory);
-        if (node != NodeStore.NoNode) MarkSubtree(store, node);
-    }
-
-    private static int FindNode(NodeStore store, string fullPath)
-    {
-        foreach (var root in store.Roots)
-        {
-            var rootName = store.Name(root);
-            if (!fullPath.StartsWith(rootName, StringComparison.OrdinalIgnoreCase)) continue;
-
-            var node = root;
-            var rest = fullPath.AsSpan(rootName.Length);
-
-            foreach (var segmentRange in rest.Split(Path.DirectorySeparatorChar))
-            {
-                var segment = rest[segmentRange];
-                if (segment.IsEmpty) continue;
-
-                var match = NodeStore.NoNode;
-                var children = store.Children(node);
-                for (var i = children.Start.Value; i < children.End.Value; i++)
-                {
-                    if (!segment.Equals(store.Name(i), StringComparison.OrdinalIgnoreCase)) continue;
-                    match = i;
-                    break;
-                }
-
-                if (match == NodeStore.NoNode) return NodeStore.NoNode;
-                node = match;
-            }
-
-            return node;
-        }
-
-        return NodeStore.NoNode;
-    }
-
-    private static void MarkSubtree(NodeStore store, int node)
-    {
-        var stack = new Stack<int>();
-        stack.Push(node);
-        while (stack.Count > 0)
-        {
-            var current = stack.Pop();
-            store.Flags[current] |= NodeFlags.SelfData;
-
-            var range = store.Children(current);
-            for (var i = range.Start.Value; i < range.End.Value; i++) stack.Push(i);
-        }
     }
 }

@@ -128,4 +128,60 @@ internal static partial class Kernel32Extra
     [LibraryImport(Dll, EntryPoint = "GetLongPathNameW", SetLastError = true,
         StringMarshalling = StringMarshalling.Utf16)]
     internal static partial uint GetLongPathName(string lpszShortPath, Span<char> lpszLongPath, uint cchBuffer);
+
+    /// <summary>
+    /// Positioned read. A synchronous handle honours the offset in the OVERLAPPED, which
+    /// is how a raw volume is read at cluster offsets without a seek call per read.
+    /// </summary>
+    [LibraryImport(Dll, EntryPoint = "ReadFile", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool ReadFile(
+        nint hFile,
+        byte* lpBuffer,
+        uint nNumberOfBytesToRead,
+        out uint lpNumberOfBytesRead,
+        NativeOverlapped* lpOverlapped);
+
+    [LibraryImport(Dll, EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool GetFileInformationByHandleEx(
+        nint hFile,
+        int fileInformationClass,
+        void* lpFileInformation,
+        uint dwBufferSize);
+
+    /// <summary>FILE_INFO_BY_HANDLE_CLASS values used here.</summary>
+    internal const int FileStandardInfo = 1;
+    internal const int FileIdInfo = 18;
+
+    /// <summary>Opens a path with the same rules as <see cref="CreateFile(string, uint, uint, nint, uint, uint, nint)"/>, from a span.</summary>
+    [LibraryImport(Dll, EntryPoint = "CreateFileW", SetLastError = true)]
+    internal static unsafe partial nint CreateFile(
+        char* lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        nint lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        nint hTemplateFile);
+}
+
+/// <summary>FILE_STANDARD_INFO (GetFileInformationByHandleEx class 1).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct FileStandardInfo
+{
+    public long AllocationSize;
+    public long EndOfFile;
+    public uint NumberOfLinks;
+    [MarshalAs(UnmanagedType.U1)] public bool DeletePending;
+    [MarshalAs(UnmanagedType.U1)] public bool Directory;
+}
+
+/// <summary>FILE_ID_INFO (class 18): volume serial plus a 128-bit file id, stable across renames.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct FileIdInfo
+{
+    public ulong VolumeSerialNumber;
+    public ulong FileIdLow;
+    public ulong FileIdHigh;
 }

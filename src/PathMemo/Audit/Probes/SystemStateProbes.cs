@@ -75,25 +75,6 @@ internal sealed class NtfsMetadataProbe : IAuditProbe
     public string Id => "ntfs.metadata";
     public string Title => "NTFS metadata";
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NtfsVolumeData
-    {
-        public long VolumeSerialNumber;
-        public long NumberSectors;
-        public long TotalClusters;
-        public long FreeClusters;
-        public long TotalReserved;
-        public uint BytesPerSector;
-        public uint BytesPerCluster;
-        public uint BytesPerFileRecordSegment;
-        public uint ClustersPerFileRecordSegment;
-        public long MftValidDataLength;
-        public long MftStartLcn;
-        public long Mft2StartLcn;
-        public long MftZoneStart;
-        public long MftZoneEnd;
-    }
-
     public IEnumerable<AuditFinding> Run(AuditContext context)
     {
         foreach (var volume in context.Volumes)
@@ -139,7 +120,7 @@ internal sealed class NtfsMetadataProbe : IAuditProbe
     /// the answer is ERROR_INVALID_FUNCTION. Any directory handle on the volume reaches
     /// NTFS, and opening one needs no privilege at all.
     /// </summary>
-    private static unsafe bool TryQuery(string root, out NtfsVolumeData data, out int error)
+    internal static bool TryQuery(string root, out NtfsVolumeData data, out int error)
     {
         data = default;
 
@@ -155,16 +136,8 @@ internal sealed class NtfsMetadataProbe : IAuditProbe
 
         try
         {
-            bool ok;
-            fixed (NtfsVolumeData* p = &data)
-            {
-                ok = Kernel32Extra.DeviceIoControl(handle, Kernel32Extra.FsctlGetNtfsVolumeData,
-                    null, 0, p, (uint)sizeof(NtfsVolumeData), out _, 0);
-            }
-
-            // Read before CloseHandle, which resets the thread's last error.
-            error = ok ? 0 : Marshal.GetLastWin32Error();
-            return ok;
+            // The error is read inside TryQuery, before CloseHandle resets it.
+            return NtfsVolumeData.TryQuery(handle, out data, out error);
         }
         finally
         {

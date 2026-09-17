@@ -13,7 +13,14 @@ namespace PathMemo.Platform;
 /// </remarks>
 internal static class Relaunch
 {
-    internal static bool AsAdministrator()
+    internal static bool AsAdministrator() => AsAdministrator(["--interactive"]);
+
+    /// <summary>
+    /// Relaunches with the given arguments. A command-line scan passes its own
+    /// arguments plus <c>--pause</c>, because the elevated copy gets a console of its
+    /// own that would close the moment it finished.
+    /// </summary>
+    internal static bool AsAdministrator(IReadOnlyList<string> arguments)
     {
         var exe = Environment.ProcessPath;
         if (exe is null)
@@ -28,7 +35,7 @@ internal static class Relaunch
             Verb = "runas",
             WorkingDirectory = Environment.CurrentDirectory,
         };
-        psi.ArgumentList.Add("--interactive");
+        foreach (var argument in arguments) psi.ArgumentList.Add(argument);
 
         try
         {

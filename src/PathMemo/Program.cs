@@ -77,18 +77,23 @@ internal static class Program
     {
         try
         {
+            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
             if (Console.IsOutputRedirected)
             {
                 // Redirected output ignores the console code page entirely, so replace the
                 // writer: piping a file listing must not mangle non-ASCII file names.
-                Console.SetOut(new StreamWriter(
-                    Console.OpenStandardOutput(),
-                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true });
+                Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
             }
             else
             {
                 Console.OutputEncoding = Encoding.UTF8;
             }
+
+            // Same for stderr, which carries warnings and paths of its own when a scan
+            // runs inside a script.
+            if (Console.IsErrorRedirected)
+                Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
 
             if (!Console.IsInputRedirected) Console.InputEncoding = Encoding.UTF8;
         }
@@ -117,12 +122,28 @@ internal static class Program
                 case "--quiet" or "-q": options = options with { Quiet = true }; break;
                 case "--no-save": options = options with { Save = false }; break;
                 case "--all-volumes": break;   // the default when no path is given
+                case "--scanner": options = options with { Scanner = ParseScanner(ArgParse.Value(args, ref i)) }; break;
+                case "--pause": options = options with { Pause = true }; break;
+                case "--no-elevate": options = options with { NoElevate = true }; break;
                 default: roots.Add(Positional(args[i])); break;
             }
         }
 
-        return options with { Roots = roots };
+        // If the user takes the offer to restart elevated, the new copy repeats this
+        // exact scan and waits before its console closes.
+        var relaunch = new List<string> { "scan" };
+        relaunch.AddRange(args);
+        if (!relaunch.Contains("--pause")) relaunch.Add("--pause");
+
+        return options with { Roots = roots, RelaunchArguments = relaunch };
     }
+
+    private static Scanning.ScannerKind ParseScanner(string value) => value.ToLowerInvariant() switch
+    {
+        "mft" => Scanning.ScannerKind.Mft,
+        "walk" => Scanning.ScannerKind.Walk,
+        _ => throw new ArgumentException($"--scanner must be mft or walk, not '{value}'"),
+    };
 
     private static TreeOptions ParseTree(string[] args)
     {
@@ -232,10 +253,14 @@ internal static class Program
 
             scan
               --top <n>           how many largest entries to list (default 15)
-              --parallelism <n>   worker count; omit to detect the storage medium
+              --scanner <kind>    mft | walk; omit to pick per volume (MFT needs NTFS
+                                  and administrator rights, and is ~10-40x faster)
+              --parallelism <n>   walk scanner worker count; omit to detect the medium
               --note <text>       label this scan
               --no-save           analyse without storing a snapshot
-              --quiet, -q         suppress the progress line
+              --no-elevate        never offer to restart as administrator
+              --quiet, -q         suppress the progress line and the elevation prompt
+              --pause             wait for Enter before exiting
 
             tree
               --scan <id>         which stored scan to read (default: newest)
