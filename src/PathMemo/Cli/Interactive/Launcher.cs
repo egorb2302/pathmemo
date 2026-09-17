@@ -33,6 +33,8 @@ internal static class Launcher
             Console.WriteLine("  [S]  scan C:\\");
             Console.WriteLine("  [V]  scan all fixed volumes");
             if (latest is not null) Console.WriteLine("  [L]  largest files over 1 GB");
+            if (SnapshotStore.List().Count >= 2) Console.WriteLine("  [C]  compare the last two scans");
+            if (latest is not null) Console.WriteLine("  [H]  scan history");
             Console.WriteLine("  [D]  diagnostics");
             if (!Elevation.IsElevated) Console.WriteLine("  [E]  restart as administrator");
             Console.WriteLine("  [Q]  quit");
@@ -61,6 +63,17 @@ internal static class Launcher
 
                 case "l" when latest is not null:
                     TopCommand.Run(new TopOptions { MinBytes = 1L << 30, Limit = 30 });
+                    Pause();
+                    break;
+
+                case "c" when SnapshotStore.List().Count >= 2:
+                    ClearScreen();
+                    DiffCommand.Run(new DiffOptions { Limit = 12 });
+                    Pause();
+                    break;
+
+                case "h" when latest is not null:
+                    HistoryCommand.Run(new HistoryOptions { Limit = 20 });
                     Pause();
                     break;
 

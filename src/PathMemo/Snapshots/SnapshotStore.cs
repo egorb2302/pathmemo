@@ -21,11 +21,16 @@ internal static class SnapshotStore
     private const int KeepMonthly = 12;
     private const long MaxTotalBytes = 400L * 1024 * 1024;
 
-    internal static long Save(ScanResult result)
+    /// <summary>
+    /// Writes a snapshot under the given scan id and applies retention. The id comes from
+    /// the caller, not from this directory: it is the same number as the row in
+    /// <c>scans</c>, so that "scan 42" means one thing everywhere (README section 11).
+    /// </summary>
+    /// <returns>Ids of snapshots that retention deleted.</returns>
+    internal static IReadOnlyList<long> Save(ScanResult result, long id)
     {
         Directory.CreateDirectory(AppPaths.SnapshotsDirectory);
 
-        var id = List().Select(s => s.Id).DefaultIfEmpty(0).Max() + 1;
         var path = PathFor(id);
 
         // Write to a temp name and move into place, so an interrupted write never leaves a
@@ -34,9 +39,11 @@ internal static class SnapshotStore
         SnapshotFile.Write(temp, result);
         File.Move(temp, path, overwrite: true);
 
-        ApplyRetention();
-        return id;
+        return ApplyRetention();
     }
+
+    /// <summary>Highest snapshot number present on disk, or 0.</summary>
+    internal static long MaxId() => List().Select(s => s.Id).DefaultIfEmpty(0).Max();
 
     internal static string PathFor(long id) => Path.Combine(
         AppPaths.SnapshotsDirectory,
@@ -69,10 +76,10 @@ internal static class SnapshotStore
         return SnapshotFile.Read(path);
     }
 
-    private static void ApplyRetention()
+    private static IReadOnlyList<long> ApplyRetention()
     {
         var all = List();
-        if (all.Count == 0) return;
+        if (all.Count == 0) return [];
 
         var keep = new HashSet<long>(all.Take(KeepRecent).Select(s => s.Id));
 
@@ -100,10 +107,17 @@ internal static class SnapshotStore
             total -= entry.Bytes;
         }
 
+        var deleted = new List<long>(doomed.Count);
         foreach (var entry in doomed)
         {
-            try { File.Delete(entry.Path); }
+            try
+            {
+                File.Delete(entry.Path);
+                deleted.Add(entry.Id);
+            }
             catch (IOException) { /* locked by another pathmemo; retried on the next scan */ }
         }
+
+        return deleted;
     }
 }

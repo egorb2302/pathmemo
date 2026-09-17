@@ -35,8 +35,18 @@
     </AssemblyAttribute>
   </ItemGroup>
 
-  <!-- P0 deliberately has zero package references so the first build cannot be
-       blocked by a dependency API surprise. System.CommandLine and
-       Spectre.Console are added in P1, verified against the restored package. -->
+  <ItemGroup>
+    <!-- The only package reference in the application, added in P4 (README section 18).
+         Manual SqliteDataReader mapping, no Dapper: reflection would cost trimming.
+         It brings the single native dependency, e_sqlite3.dll, which the single-file
+         host extracts once per version (README section 19.2). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The schema is one file, applied by PRAGMA user_version (README section 11).
+         DbUp would add a package and break trimming for 25 lines of own code. -->
+    <EmbeddedResource Include="Storage\Schema.sql" />
+  </ItemGroup>
 
 </Project>

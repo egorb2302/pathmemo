@@ -18,6 +18,19 @@ internal static class Program
 
         ConfigureConsole();
 
+        // --data-dir is global, so it is taken out of the argument list before the verb
+        // sees it. Ignored while elevated, where an arbitrary store path would be a
+        // write primitive running as administrator (README section 12.1).
+        try
+        {
+            args = TakeDataDirectory(args);
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine($"pathmemo: {ex.Message}");
+            return ExitCode.Usage;
+        }
+
         var verb = args.Length > 0 ? args[0] : "";
         var rest = args.Length > 1 ? args[1..] : [];
 
@@ -41,7 +54,8 @@ internal static class Program
                 "tree" => TreeCommand.Run(ParseTree(rest)),
                 "top" => TopCommand.Run(ParseTop(rest)),
                 "audit" => AuditCommand.Run(ParseAudit(rest), cancellation.Token),
-                "history" => HistoryCommand.Run(),
+                "history" => HistoryCommand.Run(ParseHistory(rest)),
+                "diff" => DiffCommand.Run(ParseDiff(rest)),
                 "doctor" => DoctorCommand.Run(),
                 "--version" or "-V" => PrintVersion(),
                 // No arguments: an interactive session if the window is ours to keep open
@@ -61,6 +75,18 @@ internal static class Program
         {
             Console.Error.WriteLine($"pathmemo: {ex.Message}");
             return ExitCode.Usage;
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            Console.Error.WriteLine($"pathmemo: {ex.Message}");
+            return ex.SqliteErrorCode is 5 or 6 ? ExitCode.Locked : ExitCode.Failure;
+        }
+        catch (Storage.DatabaseException ex)
+        {
+            // Exit code 8 exists so a script can tell "another pathmemo is running"
+            // from a real failure (README section 13.5).
+            Console.Error.WriteLine($"pathmemo: {ex.Message}");
+            return ex.Locked ? ExitCode.Locked : ExitCode.Failure;
         }
         catch (Exception ex)
         {
@@ -107,6 +133,29 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// Removes <c>--data-dir &lt;path&gt;</c> from the arguments and applies it, so every
+    /// command shares one store location without parsing the option itself.
+    /// </summary>
+    private static string[] TakeDataDirectory(string[] args)
+    {
+        var kept = new List<string>(args.Length);
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] != "--data-dir")
+            {
+                kept.Add(args[i]);
+                continue;
+            }
+
+            if (i + 1 >= args.Length) throw new ArgumentException("'--data-dir' needs a path");
+            Config.AppPaths.Redirect(args[++i]);
+        }
+
+        return [.. kept];
+    }
+
     private static ScanOptions ParseScan(string[] args)
     {
         var roots = new List<string>();
@@ -125,6 +174,9 @@ internal static class Program
                 case "--scanner": options = options with { Scanner = ParseScanner(ArgParse.Value(args, ref i)) }; break;
                 case "--pause": options = options with { Pause = true }; break;
                 case "--no-elevate": options = options with { NoElevate = true }; break;
+                case "--format": options = options with { Format = ParseFormat(ArgParse.Value(args, ref i)) }; break;
+                case "--output" or "-o": options = options with { Output = ArgParse.Value(args, ref i) }; break;
+                case "--json": options = options with { Format = Cli.Output.ScanFormat.Json }; break;
                 default: roots.Add(Positional(args[i])); break;
             }
         }
@@ -144,6 +196,62 @@ internal static class Program
         "walk" => Scanning.ScannerKind.Walk,
         _ => throw new ArgumentException($"--scanner must be mft or walk, not '{value}'"),
     };
+
+    private static Cli.Output.ScanFormat ParseFormat(string value) => value.ToLowerInvariant() switch
+    {
+        "console" or "text" => Cli.Output.ScanFormat.Console,
+        "json" => Cli.Output.ScanFormat.Json,
+        "csv" => Cli.Output.ScanFormat.Csv,
+        _ => throw new ArgumentException($"--format must be console, json or csv, not '{value}'"),
+    };
+
+    private static HistoryOptions ParseHistory(string[] args)
+    {
+        var options = new HistoryOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--limit": options = options with { Limit = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--since": options = options with { Since = ArgParse.Since(ArgParse.Value(args, ref i)) }; break;
+                case "--json": options = options with { Json = true }; break;
+                case "--categories": options = options with { Categories = true, Json = true }; break;
+                default: throw new ArgumentException($"unexpected argument '{args[i]}'");
+            }
+        }
+
+        return options;
+    }
+
+    private static DiffOptions ParseDiff(string[] args)
+    {
+        var options = new DiffOptions();
+        var ids = new List<long>(2);
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--limit": options = options with { Limit = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--min": options = options with { MinBytes = ArgParse.Size(ArgParse.Value(args, ref i)) }; break;
+                case "--size": options = options with { SizeMode = ArgParse.Mode(ArgParse.Value(args, ref i)) }; break;
+                case "--json": options = options with { Json = true }; break;
+                default:
+                    ids.Add(ArgParse.Id(Positional(args[i])));
+                    if (ids.Count > 2) throw new ArgumentException("diff takes at most two scan ids");
+                    break;
+            }
+        }
+
+        // One id means "that scan against the newest", none means "the last two".
+        return ids.Count switch
+        {
+            2 => options with { BeforeId = ids[0], AfterId = ids[1] },
+            1 => options with { BeforeId = ids[0] },
+            _ => options,
+        };
+    }
 
     private static TreeOptions ParseTree(string[] args)
     {
@@ -246,10 +354,15 @@ internal static class Program
               tree [<path>]       one level of the last scan, largest first
               top [options]       largest files or directories, with filters
               audit [options]     space no scan can see: restore points, WinSxS, WSL, caches
-              history             list stored scans
+              history [options]   list stored scans
+              diff [<a> <b>]      what changed between two scans (default: the last two)
               doctor              report what pathmemo can do on this machine
               help                show this help
               --version           print version
+
+            GLOBAL
+              --data-dir <path>   where to keep snapshots and the database
+                                  (ignored while running as administrator)
 
             scan
               --top <n>           how many largest entries to list (default 15)
@@ -261,6 +374,8 @@ internal static class Program
               --no-elevate        never offer to restart as administrator
               --quiet, -q         suppress the progress line and the elevation prompt
               --pause             wait for Enter before exiting
+              --format <kind>     console | json | csv (default console)
+              --output <file>     write the result there instead of stdout
 
             tree
               --scan <id>         which stored scan to read (default: newest)
@@ -278,6 +393,21 @@ internal static class Program
               --paths-only        one path per line, for pipes
               --scan <id>, --size <mode>
 
+            history
+              --limit <n>         rows to show (default 50)
+              --since <when>      only scans since a date or a duration back (2026-09-01, 30d)
+              --json              machine-readable, with per-volume numbers
+              --categories        add the per-category totals (implies --json)
+
+            diff
+              <a> <b>             scan ids; one id means "against the newest",
+                                  none means "the last two"
+              --limit <n>         rows per section (default 15)
+              --min <size>        change the 64MB floor of the interest threshold
+              --size <mode>       unique | allocated | logical (default unique)
+              --json              machine-readable
+              Both scans need their snapshot, and neither may be a cancelled one.
+
             audit
               --id <probe>        one probe in full, with every remedy and path
               --copy              with --id: put the first command on the clipboard
@@ -288,7 +418,7 @@ internal static class Program
               measure restore points and the component store.
 
             Not implemented yet (see README.md for the full command set):
-              reclaim, dupes, rm, restore, purge, ops, diff,
+              reclaim, dupes, rm, restore, purge, ops,
               errors, export, schedule, config
             """);
         return ExitCode.Ok;

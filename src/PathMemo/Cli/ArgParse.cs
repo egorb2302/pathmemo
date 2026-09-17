@@ -73,6 +73,28 @@ internal static class ArgParse
             ? value
             : throw new ArgumentException($"not a scan id: '{text}'");
 
+    /// <summary>
+    /// Accepts a date ("2026-09-01"), a date and time, or a duration back from now
+    /// ("30d"), which is what a person actually types after <c>--since</c>.
+    /// </summary>
+    internal static DateTime Since(string text)
+    {
+        var trimmed = text.Trim();
+
+        if (DateTime.TryParse(trimmed, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var absolute))
+            return absolute;
+
+        try
+        {
+            return DateTime.UtcNow - Duration(trimmed);
+        }
+        catch (ArgumentException)
+        {
+            throw new ArgumentException($"not a date or duration: '{text}' (try 2026-09-01 or 30d)");
+        }
+    }
+
     internal static SizeMode Mode(string text) => text.ToLowerInvariant() switch
     {
         "unique" => SizeMode.Unique,

@@ -96,6 +96,29 @@ internal static class SnapshotFile
         foreach (var section in stored) file.Write(section.Bytes);
     }
 
+    /// <summary>
+    /// Whether this file still looks like a snapshot this build can open, by its header
+    /// alone. Cheap enough to check on every reconciliation, which is what lets a
+    /// truncated or foreign file be marked unavailable instead of failing later
+    /// (README section 5.4, threat T14).
+    /// </summary>
+    internal static bool IsReadable(string path)
+    {
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, HeaderBytes);
+            var head = new byte[HeaderBytes];
+            file.ReadExactly(head);
+
+            return head.AsSpan(0, 6).SequenceEqual(Magic)
+                && BinaryPrimitives.ReadUInt16LittleEndian(head.AsSpan(8)) == FormatVersion;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     internal static SnapshotContents Read(string path)
     {
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);

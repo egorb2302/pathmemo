@@ -1,10 +1,12 @@
 using System.Globalization;
+using PathMemo.Analysis;
 using PathMemo.Cli.Interactive;
 using PathMemo.Cli.Output;
 using PathMemo.Platform;
 using PathMemo.Scanning;
 using PathMemo.Scanning.Mft;
 using PathMemo.Snapshots;
+using PathMemo.Storage;
 
 namespace PathMemo.Cli.Commands;
 
@@ -40,21 +42,161 @@ internal static class ScanCommand
             ForceScanner = options.Scanner,
         };
 
-        var reporter = options.Quiet ? null : new ProgressPrinter();
-        var result = await ScanAllAsync(request, volumes, reporter, ct);
-        reporter?.Finish();
+        // History is a convenience, not a precondition: a busy or broken database must
+        // not stop a scan. The snapshot is still written and still readable.
+        // --no-save means exactly that, so it records nothing at all, not even the row.
+        using var catalog = OpenCatalog(options.Save, out var databaseError);
+        if (databaseError is not null)
+            Console.Error.WriteLine($"pathmemo: this scan will not be recorded in the history - {databaseError}");
+
+        // Reserving the id before the scan, in the database, is what makes two pathmemos
+        // started at once write two snapshots instead of fighting over one number. The
+        // snapshot directory is only the fallback when there is no usable database.
+        long? reserved = null;
+        if (catalog is not null)
+        {
+            catalog.Reconcile();
+            Record(catalog, () => reserved = catalog.Scans.BeginNew(DateTime.UtcNow,
+                PlannedScanner(volumes, options.Scanner), request.Roots, options.Note));
+        }
+
+        var scanId = reserved ?? SnapshotStore.MaxId() + 1;
+
+        var reporter = options.Quiet || options.Format != ScanFormat.Console ? null : new ProgressPrinter();
+
+        ScanResult result;
+        try
+        {
+            result = await ScanAllAsync(request, volumes, reporter, ct);
+        }
+        catch (Exception ex)
+        {
+            // The row stays, saying what happened. A history that quietly loses failed
+            // scans is how "the tool says the disk shrank" starts.
+            Record(catalog, () => catalog!.Scans.Fail(scanId,
+                ex is OperationCanceledException ? ScanStatus.Cancelled : ScanStatus.Failed,
+                ex is OperationCanceledException ? null : ex.Message));
+            throw;
+        }
+        finally
+        {
+            reporter?.Finish();
+        }
 
         long? snapshotId = null;
         if (options.Save)
         {
-            snapshotId = SnapshotStore.Save(result);
+            var dropped = SnapshotStore.Save(result, scanId);
+            snapshotId = scanId;
+            if (dropped.Count > 0) Record(catalog, () => catalog!.ForgetSnapshots(dropped));
         }
 
-        PrintSummary(result, options, snapshotId);
+        // One pass over the tree, used both by the stored aggregates and by the summary:
+        // the category totals are the same numbers either way (README section 11).
+        var aggregateClock = System.Diagnostics.Stopwatch.StartNew();
+        var aggregates = ScanAggregates.Compute(result.Tree);
+        var aggregateTime = aggregateClock.Elapsed;
+
+        Record(catalog, () => catalog!.Scans.Complete(scanId, result,
+            (result.Flags & ScanFlags.Partial) != 0 ? ScanStatus.Cancelled : ScanStatus.Completed,
+            snapshotId is null ? null : SnapshotStore.PathFor(scanId),
+            snapshotId is null ? null : SnapshotBytes(scanId),
+            aggregates));
+
+        if (Environment.GetEnvironmentVariable("PATHMEMO_DIAG") == "1")
+        {
+            Console.Error.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "  diag: category and extension totals over {0:N0} nodes in {1:F0} ms",
+                result.TotalNodes, aggregateTime.TotalMilliseconds));
+        }
+
+        Emit(result, options, snapshotId, aggregates);
 
         if (options.Pause) Launcher.Pause();
 
         return (result.Flags & ScanFlags.Partial) != 0 ? ExitCode.Partial : ExitCode.Ok;
+    }
+
+    private static ScanCatalog? OpenCatalog(bool save, out string? error)
+    {
+        error = null;
+        return save ? ScanCatalog.TryOpen(out error) : null;
+    }
+
+    /// <summary>
+    /// Writes to the history, or says why it could not. Never throws: the scan and its
+    /// snapshot are the deliverable, and the row about them is not worth losing them for.
+    /// </summary>
+    private static void Record(ScanCatalog? catalog, Action work)
+    {
+        if (catalog is null) return;
+
+        // A null reason means this run already reported the failure; saying it again
+        // once per step would bury the scan's own output.
+        if (!catalog.TryWrite(work, out var error) && error is not null)
+            Console.Error.WriteLine($"pathmemo: history not updated - {error}");
+    }
+
+    /// <summary>
+    /// Which scanner this run expects to use, recorded before it starts. The actual kind
+    /// replaces it on completion, because a volume can fall back to the walk (README 4.3).
+    /// </summary>
+    private static ScannerKind PlannedScanner(IReadOnlyList<VolumeInfo> volumes, ScannerKind? forced)
+    {
+        if (forced is { } kind) return kind;
+
+        var mft = new MftScanner();
+        return volumes.Any(v => mft.CanScan(v).Can) ? ScannerKind.Mft : ScannerKind.Walk;
+    }
+
+    private static long? SnapshotBytes(long id)
+    {
+        var info = new FileInfo(SnapshotStore.PathFor(id));
+        return info.Exists ? info.Length : null;
+    }
+
+    /// <summary>
+    /// Writes the result where the caller asked for it: the reading summary, or one of
+    /// the machine formats, to stdout or to a file (README section 13.2).
+    /// </summary>
+    private static void Emit(ScanResult result, ScanOptions options, long? snapshotId,
+                             ScanAggregateSet aggregates)
+    {
+        if (options.Format == ScanFormat.Json)
+        {
+            using var stream = options.Output is { } jsonPath
+                ? new FileStream(jsonPath, FileMode.Create, FileAccess.Write)
+                : Console.OpenStandardOutput();
+
+            ScanExport.Json(stream, result, snapshotId, options.Top, aggregates);
+            Wrote(options);
+            return;
+        }
+
+        var writer = options.Output is { } path
+            ? new StreamWriter(path, append: false, new System.Text.UTF8Encoding(false))
+            : null;
+
+        try
+        {
+            var target = writer ?? Console.Out;
+
+            if (options.Format == ScanFormat.Csv) ScanExport.Csv(target, result, options.Top);
+            else PrintSummary(target, result, options, snapshotId, aggregates);
+        }
+        finally
+        {
+            writer?.Dispose();
+        }
+
+        Wrote(options);
+    }
+
+    private static void Wrote(ScanOptions options)
+    {
+        // Progress and confirmations belong on stderr so that stdout stays the data
+        // (README section 13.6).
+        if (options.Output is { } path) Console.Error.WriteLine($"wrote {path}");
     }
 
     /// <summary>
@@ -195,10 +337,10 @@ internal static class ScanCommand
     private static string EnsureTrailingSeparator(string path) =>
         path.EndsWith(Path.DirectorySeparatorChar) ? path : path + Path.DirectorySeparatorChar;
 
-    private static void PrintSummary(ScanResult result, ScanOptions options, long? snapshotId)
+    private static void PrintSummary(TextWriter w, ScanResult result, ScanOptions options,
+                                     long? snapshotId, ScanAggregateSet aggregates)
     {
         var tree = result.Tree;
-        var w = Console.Out;
 
         w.WriteLine();
         w.WriteLine(string.Format(CultureInfo.InvariantCulture,
@@ -223,6 +365,7 @@ internal static class ScanCommand
                 w.WriteLine($"  · {note.Path}: {note.Message}");
         }
 
+        PrintCategories(w, aggregates, result.AllocatedBytes);
         PrintLimitations(w, result);
 
         if (Environment.GetEnvironmentVariable("PATHMEMO_DIAG") == "1")
@@ -243,6 +386,10 @@ internal static class ScanCommand
         {
             w.WriteLine();
             w.WriteLine($"Saved as scan {id}.  Browse it with:  pathmemo tree   ·   pathmemo top --min 1GB");
+
+            var previous = SnapshotStore.List().FirstOrDefault(s => s.Id < id);
+            if (previous is not null)
+                w.WriteLine($"Compare it with the one before:  pathmemo diff {previous.Id} {id}");
         }
 
         w.WriteLine();
@@ -286,6 +433,36 @@ internal static class ScanCommand
                 result.Scanner == ScannerKind.Mft
                     ? "  - run 'pathmemo audit' for restore points and other invisible space"
                     : "  - hard links, metadata and skipped paths; the MFT scan closes most of it"));
+        }
+    }
+
+    /// <summary>
+    /// What the disk is made of, from the same totals that go into the database and
+    /// outlive the snapshot (README section 11).
+    /// </summary>
+    /// <remarks>
+    /// A directory claims its whole subtree before extensions get a say, so everything
+    /// under <c>C:\Windows</c> is system and a cache full of archives is still a cache.
+    /// This is a summary to look at, never a deletion decision: that is what
+    /// <c>reclaim</c> will be, rule by rule and path by path.
+    /// </remarks>
+    private static void PrintCategories(TextWriter w, ScanAggregateSet aggregates, long total)
+    {
+        if (aggregates.Categories.Count == 0) return;
+
+        w.WriteLine();
+        w.WriteLine("By category");
+
+        foreach (var category in aggregates.Categories)
+        {
+            var share = total > 0 ? category.AllocatedBytes * 100.0 / total : 0;
+
+            w.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "  {0,-9} {1,9}  {2,5:F1}%  {3,11} files",
+                FileCategories.Name(category.Category),
+                SizeFormat.Bytes(category.AllocatedBytes),
+                share,
+                category.FileCount.ToString("N0", CultureInfo.InvariantCulture)));
         }
     }
 
@@ -407,4 +584,10 @@ internal sealed record ScanOptions
 
     /// <summary>What to pass to the elevated copy if the user asks for one.</summary>
     internal IReadOnlyList<string> RelaunchArguments { get; init; } = ["--interactive"];
+
+    /// <summary>Console summary, or one of the machine formats (README section 13.2).</summary>
+    internal ScanFormat Format { get; init; } = ScanFormat.Console;
+
+    /// <summary>Where the result goes. Null means stdout.</summary>
+    internal string? Output { get; init; }
 }

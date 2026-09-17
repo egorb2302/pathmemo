@@ -2,6 +2,8 @@ using System.Globalization;
 using PathMemo.Cli.Output;
 using PathMemo.Config;
 using PathMemo.Platform;
+using PathMemo.Snapshots;
+using PathMemo.Storage;
 
 namespace PathMemo.Cli.Commands;
 
@@ -36,8 +38,9 @@ internal static class DoctorCommand
         w.WriteLine();
 
         Section(w, "STORAGE");
-        Field(w, "Data directory", AppPaths.DataDirectory);
+        Field(w, "Data directory", AppPaths.DataDirectory + (AppPaths.IsRedirected ? "   (--data-dir)" : ""));
         Field(w, "Exists", Directory.Exists(AppPaths.DataDirectory) ? "yes" : "no  (created on first scan)");
+        PrintDatabase(w);
         w.WriteLine();
 
         Section(w, "VOLUMES");
@@ -75,6 +78,49 @@ internal static class DoctorCommand
         }
 
         return ExitCode.Ok;
+    }
+
+    /// <summary>
+    /// The state of the metadata store. Reported by doctor because "the database is
+    /// locked" and "the database is from a newer build" are the two failures a user
+    /// cannot otherwise diagnose (README section 13).
+    /// </summary>
+    private static void PrintDatabase(TextWriter w)
+    {
+        var file = new FileInfo(AppPaths.DatabasePath);
+        var snapshots = SnapshotStore.List();
+        var snapshotBytes = snapshots.Sum(s => s.Bytes);
+
+        Field(w, "Snapshots", snapshots.Count == 0
+            ? "none"
+            : string.Format(CultureInfo.InvariantCulture, "{0} files, {1}", snapshots.Count, SizeFormat.Bytes(snapshotBytes)));
+
+        if (!file.Exists)
+        {
+            Field(w, "Database", "absent  (created on first scan)");
+            return;
+        }
+
+        Field(w, "Database", $"{SizeFormat.Bytes(file.Length)}   {AppPaths.DatabasePath}");
+
+        using var catalog = ScanCatalog.TryOpen(out var error);
+        if (catalog is null)
+        {
+            Field(w, "Database state", $"unusable: {error}");
+            return;
+        }
+
+        var (imported, forgotten) = catalog.Reconcile();
+
+        Field(w, "Schema version", catalog.Database.Version.ToString(CultureInfo.InvariantCulture)
+            + (catalog.Database.Version == Database.SchemaVersion ? "  (current)" : "  (older than this build)"));
+        Field(w, "Scans recorded", catalog.Scans.Count().ToString(CultureInfo.InvariantCulture));
+
+        if (imported > 0 || forgotten > 0)
+            Field(w, "Reconciled", $"{imported} snapshot(s) imported, {forgotten} row(s) without a snapshot");
+
+        if (catalog.Database.RecoveredFromUncleanExit)
+            Field(w, "Integrity check", catalog.Database.IntegrityResult ?? "not run");
     }
 
     private static string TerminalSize()

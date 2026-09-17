@@ -41,6 +41,10 @@ internal static class AuditCommand
 
         if (progress is not null) Console.Error.Write("\r" + new string(' ', 52) + "\r");
 
+        // A single probe run is a spot check, not a data point worth keeping; a full
+        // audit is what the history is for (README section 11).
+        if (options.Id is null) Record(report);
+
         if (options.Json)
         {
             WriteJson(report, options.Id is not null);
@@ -57,6 +61,34 @@ internal static class AuditCommand
 
         Print(report, Console.Out);
         return ExitCode.Ok;
+    }
+
+    /// <summary>
+    /// Stores the findings. Never fatal: the audit has already told the user what it
+    /// found, and a busy database is no reason to throw that away.
+    /// </summary>
+    private static void Record(AuditReport report)
+    {
+        using var catalog = Storage.ScanCatalog.TryOpen(out var error);
+        if (catalog is null)
+        {
+            if (error is not null) Console.Error.WriteLine($"pathmemo: findings not stored - {error}");
+            return;
+        }
+
+        try
+        {
+            catalog.Reconcile();
+            new Storage.AuditRepository(catalog.Database).Save(report);
+        }
+        catch (Storage.DatabaseException ex)
+        {
+            Console.Error.WriteLine($"pathmemo: findings not stored - {ex.Message}");
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
+        {
+            Console.Error.WriteLine($"pathmemo: findings not stored - {ex.Message}");
+        }
     }
 
     internal static void Print(AuditReport report, TextWriter w)
