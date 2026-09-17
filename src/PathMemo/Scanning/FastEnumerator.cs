@@ -152,7 +152,7 @@ internal sealed class DirectoryLister
     /// same value comes free - is the preferred path. The path is composed into a stack
     /// buffer so that a million calls allocate nothing.
     /// </remarks>
-    private static unsafe long QueryAllocatedSize(
+    internal static unsafe long QueryAllocatedSize(
         ReadOnlySpan<char> directory, ReadOnlySpan<char> name, long fallback)
     {
         const string LongPrefix = @"\\?\";

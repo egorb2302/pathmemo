@@ -28,11 +28,13 @@ internal static class Launcher
             var latest = SnapshotStore.Latest();
 
             Console.WriteLine();
+            Console.WriteLine("  [A]  audit: space no scan can see (restore points, WSL, caches, hiberfil)");
             if (latest is not null) Console.WriteLine("  [B]  browse the last scan");
             Console.WriteLine("  [S]  scan C:\\");
-            Console.WriteLine("  [A]  scan all fixed volumes");
+            Console.WriteLine("  [V]  scan all fixed volumes");
             if (latest is not null) Console.WriteLine("  [L]  largest files over 1 GB");
             Console.WriteLine("  [D]  diagnostics");
+            if (!Elevation.IsElevated) Console.WriteLine("  [E]  restart as administrator");
             Console.WriteLine("  [Q]  quit");
             Console.WriteLine();
             Console.Write("  > ");
@@ -41,6 +43,10 @@ internal static class Launcher
 
             switch (choice)
             {
+                case "a":
+                    AuditView.Run(ct);
+                    break;
+
                 case "b" when latest is not null:
                     Browser.Run(latest.Id);
                     break;
@@ -49,7 +55,7 @@ internal static class Launcher
                     await RunScan([@"C:\"], ct);
                     break;
 
-                case "a":
+                case "v":
                     await RunScan([], ct);
                     break;
 
@@ -60,6 +66,11 @@ internal static class Launcher
 
                 case "d":
                     DoctorCommand.Run();
+                    Pause();
+                    break;
+
+                case "e" when !Elevation.IsElevated:
+                    if (Relaunch.AsAdministrator()) return ExitCode.Ok;
                     Pause();
                     break;
 

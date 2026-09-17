@@ -40,6 +40,7 @@ internal static class Program
                 "scan" => await ScanCommand.RunAsync(ParseScan(rest), cancellation.Token),
                 "tree" => TreeCommand.Run(ParseTree(rest)),
                 "top" => TopCommand.Run(ParseTop(rest)),
+                "audit" => AuditCommand.Run(ParseAudit(rest), cancellation.Token),
                 "history" => HistoryCommand.Run(),
                 "doctor" => DoctorCommand.Run(),
                 "--version" or "-V" => PrintVersion(),
@@ -167,6 +168,31 @@ internal static class Program
         return options;
     }
 
+    private static AuditOptions ParseAudit(string[] args)
+    {
+        var options = new AuditOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--id": options = options with { Id = ArgParse.Value(args, ref i) }; break;
+                case "--json": options = options with { Json = true }; break;
+                case "--quiet" or "-q": options = options with { Quiet = true }; break;
+                case "--copy": options = options with { Copy = true }; break;
+                case "--copy-index": options = options with { Copy = true, CopyIndex = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--apply":
+                    throw new ArgumentException("--apply is not implemented yet; remedies are shown and copied, never run (README section 6.3)");
+                default: throw new ArgumentException($"unexpected argument '{args[i]}'");
+            }
+        }
+
+        if (options.Copy && options.Id is null)
+            throw new ArgumentException("--copy needs --id <finding>");
+
+        return options;
+    }
+
     private static string Positional(string arg) =>
         arg.StartsWith('-') ? throw new ArgumentException($"unknown option '{arg}'") : arg;
 
@@ -198,6 +224,7 @@ internal static class Program
               scan [<path>...]    traverse the given roots, or every fixed volume
               tree [<path>]       one level of the last scan, largest first
               top [options]       largest files or directories, with filters
+              audit [options]     space no scan can see: restore points, WinSxS, WSL, caches
               history             list stored scans
               doctor              report what pathmemo can do on this machine
               help                show this help
@@ -226,8 +253,17 @@ internal static class Program
               --paths-only        one path per line, for pipes
               --scan <id>, --size <mode>
 
+            audit
+              --id <probe>        one probe in full, with every remedy and path
+              --copy              with --id: put the first command on the clipboard
+              --copy-index <n>    with --id: copy the n-th command instead
+              --json              machine-readable report
+              --quiet, -q         no progress line
+              Read-only: remedies are shown, never run. Run as administrator to
+              measure restore points and the component store.
+
             Not implemented yet (see README.md for the full command set):
-              audit, reclaim, dupes, rm, restore, purge, ops, diff,
+              reclaim, dupes, rm, restore, purge, ops, diff,
               errors, export, schedule, config
             """);
         return ExitCode.Ok;

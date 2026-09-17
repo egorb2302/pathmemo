@@ -12,7 +12,7 @@
 | P0 | Каркас, манифест, single-file publish, `doctor` | **готово** — 16.1 МБ exe с trimming |
 | P1 | Walk-сканер, формат `.pmsnap`, `scan` / `tree` / `top` / `history` | **готово** — 1.22 млн файлов за 41 с, 50 тестов зелёные |
 | P1+ | Интерактивный запуск двойным кликом: статус томов, меню, построчная навигация по дереву | **готово** — временная замена экранам Overview и Tree до P5 |
-| P2 | Space Audit: VSS, WinSxS, WSL/Docker vhdx, hiberfil, корзина | не начато |
+| P2 | Space Audit: 21 проба, `audit` / `--id` / `--copy` / `--json`, пункт `[A]` в интерактивном меню, перезапуск с правами администратора `[E]` | **готово** — 4.1 с без прав администратора (16 проб отвечают без них), 76 тестов зелёные |
 | P3 | MFT-сканер + hardlink-дедупликация | не начато |
 | P4 | SQLite, история, diff | не начато |
 | P5 | TUI: Overview + Tree | не начато |
@@ -112,6 +112,8 @@ pathmemo отвечает на два вопроса:
 Запуск из Проводника отличается от запуска из оболочки через `GetConsoleProcessList`: ровно один процесс, подключённый к консоли, означает, что окно создано для нас и исчезнет вместе с нами. Без этой проверки двойной клик по консольному приложению даёт вспышку окна на долю секунды.
 
 До P5 интерактивная сессия — построчная (`Console.ReadLine`), без raw-режима и управления курсором: она одинаково работает в conhost, Windows Terminal и где угодно ещё и не может оставить терминал в сломанном состоянии. Принимаемые клавиши (`u`, `r`, `q`, `m`, `n`/`p`) — те же, что будут в настоящем экране Tree, чтобы моторная память переносилась.
+
+Меню: `[A]` audit, `[B]` browse, `[S]` scan C:, `[V]` scan all volumes, `[L]` largest files, `[D]` diagnostics, `[E]` restart as administrator (показывается только без прав), `[Q]` quit. Пункт `[E]` перезапускает тот же exe через `ShellExecute` с глаголом `runas` и аргументом `--interactive`: манифест остаётся `asInvoker`, права запрашиваются только когда пользователь их попросил — ради проб VSS и DISM.
 
 ---
 
@@ -472,16 +474,16 @@ record Remedy(
 
 | ID | Что измеряет | Как | Типичный размер | Способ очистки |
 |---|---|---|---|---|
-| `vss.shadow-storage` | Теневые копии / точки восстановления | WMI `Win32_ShadowStorage`, `Win32_ShadowCopy` | 5–60 ГБ | `vssadmin delete shadows /for=C: /oldest`, либо уменьшить квоту `vssadmin resize shadowstorage` |
-| `winsxs.component-store` | Component store, реально удаляемая часть | `DISM /Online /Cleanup-Image /AnalyzeComponentStore` (парсинг вывода) | 2–12 ГБ | `DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase` ⚠️ |
+| `vss.shadow-storage` | Теневые копии / точки восстановления | CIM `Win32_ShadowStorage`, `Win32_ShadowCopy` через `powershell.exe -NoProfile` из System32, ответ в JSON — байты целыми числами в любой локали; **только elevated** | 5–60 ГБ | `vssadmin delete shadows /for=C: /oldest`, либо уменьшить квоту `vssadmin resize shadowstorage` |
+| `winsxs.component-store` | Component store, реально удаляемая часть | `DISM /English /Online /Cleanup-Image /AnalyzeComponentStore`; парсинг по позиции строк `label : value`, не по словам; **только elevated**, без прав показывает размер из снимка с пометкой о hardlink | 2–12 ГБ | `DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase` ⚠️ |
 | `windows.old` | Предыдущая установка Windows | наличие + размер из снимка | 10–30 ГБ | `cleanmgr` handler `Previous Installations`, или удаление с `takeown` |
 | `wu.softwaredistribution` | Кэш Windows Update | размер `%WINDIR%\SoftwareDistribution\Download` | 1–20 ГБ | stop `wuauserv`+`bits` → clear → start |
 | `wu.delivery-optimization` | Кэш P2P-доставки обновлений | `Get-DeliveryOptimizationStatus`, `%WINDIR%\SoftwareDistribution\DeliveryOptimization` | 1–10 ГБ | `Delete-DeliveryOptimizationCache` |
 | `windows.installer-orphans` | Осиротевшие MSI/MSP в `%WINDIR%\Installer` | сверка с `HKLM\...\Uninstall` и `Installer\Products` | 2–15 ГБ | ⚠️ только отчёт + ручная проверка; авто-удаление ломает деинсталляцию |
-| `hiberfil` | Файл гибернации | размер + `powercfg /a` | 0.4 × RAM | `powercfg /h off` или `powercfg /h /size 40` |
+| `hiberfil` | Файл гибернации | размер из листинга корня (без открытия файла) + реестр `Power\HiberFileType` (1 = reduced, 2 = full); `powercfg` не вызывается | 0.4 × RAM | `powercfg /h /type reduced` или `powercfg /h off` |
 | `pagefile` | Файл подкачки | размер + `Win32_PageFileSetting` | 1–32 ГБ | System Properties → Advanced → Virtual Memory (`OpenSettings`) |
 | `swapfile` | Swapfile для UWP | размер | 256 МБ | вместе с pagefile |
-| `recyclebin` | Корзина по каждому тому | `SHQueryRecycleBinW` | 0–50 ГБ | `SHEmptyRecycleBin` (в приложении) |
+| `recyclebin` | Корзина по каждому тому | `SHQueryRecycleBinW` (`SHQUERYRBINFO` — 24 байта с естественным выравниванием, при `Pack=1` Shell отвечает `E_INVALIDARG`) | 0–50 ГБ | `SHEmptyRecycleBin` (в приложении, P6); до этого `Clear-RecycleBin` |
 | `wsl.vhdx` | Виртуальные диски WSL2 | реестр `Lxss` → `BasePath\ext4.vhdx`, logical vs allocated | 10–100 ГБ | `wsl --manage <d> --set-sparse true`, либо `diskpart` → `compact vdisk` |
 | `docker.vhdx` | Диски Docker Desktop | `%LOCALAPPDATA%\Docker\wsl\*\*.vhdx` | 10–80 ГБ | `docker system prune -a --volumes` затем compact |
 | `hyperv.vhdx` | VHD/VHDX вне Docker/WSL | из снимка по расширению | варьируется | `Optimize-VHD`, отчёт |
@@ -492,7 +494,7 @@ record Remedy(
 | `browser.caches` | Кэши Chrome/Edge/Firefox/Brave | известные пути | 1–15 ГБ | удаление при закрытом браузере (safe) |
 | `store.temp` | `%WINDIR%\Temp`, `%TEMP%`, `%LOCALAPPDATA%\Temp` | обход | 0.5–20 ГБ | удаление с пропуском занятых (safe) |
 | `defender.history` | `%ProgramData%\Microsoft\Windows Defender\Scans\History` | размер | 0.1–3 ГБ | удаление (safe) |
-| `ntfs.metadata` | `$MFT`, `$LogFile`, `$Bitmap`, `$Secure` | `FSCTL_GET_NTFS_VOLUME_DATA` | 1–5 ГБ | **не освобождается**, только объяснение |
+| `ntfs.metadata` | `$MFT` + зарезервированные под метаданные кластеры | `FSCTL_GET_NTFS_VOLUME_DATA` через handle **корневого каталога** (`C:\` + `FILE_FLAG_BACKUP_SEMANTICS`), не через `\\.\C:`: том без `GENERIC_READ` открывается «напрямую в устройство», минуя NTFS, и FSCTL возвращает `ERROR_INVALID_FUNCTION`; `GENERIC_READ` на том требует прав. Каталог — нет. | 1–5 ГБ | **не освобождается**, только объяснение |
 
 ### 6.2. Развёрнутый вывод
 
@@ -547,6 +549,15 @@ Volume C:   476.1 GB total   ·   21.3 GB free   ·   95.5% used
 - Внешние утилиты вызываются только для **чтения** (`DISM /Analyze...`, `vssadmin list`, `powercfg /a`) — через `Process.Start` с `ArgumentList`, без shell, с таймаутом 30 с, из `%WINDIR%\System32` по полному пути (защита от PATH hijacking).
 - Парсинг вывода `DISM`/`vssadmin` завязан на локаль. Поэтому: `CultureInfo.InvariantCulture` в окружении процесса, парсинг по числам и структуре, а не по английским словам; при неудаче парсинга — проба возвращает `Unknown`, а не ноль.
 - Устранение (`Remedy`) по умолчанию **только показывается и копируется в буфер**. Выполнение — только по явной команде `pathmemo audit --apply <id>` или кнопке в TUI, всегда с подтверждением, всегда с логированием. `RemedyKind.RunCommand` с `NeedsElevation` требует отдельного elevated-процесса.
+
+### 6.4. Как это реализовано (P2)
+
+- **Изоляция проб.** `AuditRunner` запускает пробы параллельно (`Parallel.For`, ≤ 8 потоков); каждая ограничена 45 с, исключение или таймаут превращаются в finding со `status=error` и текстом причины — отчёт не пропадает из-за одной пробы. Проба, которая не может измерить, возвращает `NeedsElevation` / `NoSnapshot` / `Unknown` / `NotApplicable`, но никогда не «0 байт».
+- **Два числа, оба nullable.** `UsedBytes` — сколько занято, `ReclaimableBytes` — сколько вернётся. WSL и Docker знают первое и не знают второго (сколько свободно внутри vhdx видно только изнутри, а запуск дистрибутива ради вопроса — не read-only действие). Такие пробы попадают в секцию `WORTH A LOOK`, а не в сумму `RECLAIMABLE`. `pagefile` — особый случай: reclaimable равен размеру, если есть другой фиксированный том с > 20 ГБ свободно, и проба прямо советует перенести файл подкачки туда; иначе 0.
+- **Измерение каталогов** (`DirectoryMeasure`): размер на диске — логический, округлённый вверх до кластера, и только для файлов с атрибутами `Compressed` или `SparseFile` вызывается `GetCompressedFileSize`. Атрибуты уже лежат в буфере перечисления, поэтому это бесплатно; замер на `%TEMP%` из 175 тыс. файлов: 20 с с вызовом на каждый файл, ~3 с без. Reparse points не считаются и не обходятся, cloud-плейсхолдеры — 0 байт на диске. Ошибки доступа считаются, а не бросаются: «нижняя граница + пометка» полезнее пустого результата.
+- **Внешние утилиты** (`ExternalTool`): только `%WINDIR%\System32\*` по абсолютному пути, `ArgumentList`, без окна, без `__COMPAT_LAYER`, таймаут с `Kill(entireProcessTree)`. Вывод декодируется в OEM-кодовой странице консоли (`CodePagesEncodingProvider` регистрируется один раз). Два вызова во всём аудите, оба только elevated: DISM (`/English` фиксирует формат) и `powershell.exe` для CIM.
+- **`--apply` отложен до P6**: команда, изменяющая систему, должна попадать в журнал операций (§9.7), а журнала ещё нет. Сейчас есть `--copy` / `--copy-index <n>` (буфер обмена через `OpenClipboard`/`SetClipboardData` на STA-потоке, §15.1) и `c<n>` в интерактивном режиме.
+- **Что пробы не умеют без прав администратора:** VSS, DISM (WinSxS, точный статус reserved storage), `Minidump`/`LiveKernelReports`, `Defender\Scans\History`, часть `Windows\Logs`. На реальной машине без прав отвечают 16 проб из 21, за 4.1 с.
 
 ---
 
@@ -1826,7 +1837,7 @@ dotnet publish src/PathMemo/PathMemo.csproj \
 | Открытие существующего снимка | **< 300 мс** | **измерено ~250 мс** (полная распаковка; ленивая загрузка секций ещё не включена) |
 | Навигация в дереве (кадр) | **< 16 мс** | 60 FPS, виртуализация |
 | Вход в каталог с 200 тыс. детей | < 50 мс | дети непрерывны в массиве |
-| Space Audit (все пробы) | < 8 с | `DISM /AnalyzeComponentStore` — самая медленная, 3–6 с |
+| Space Audit (все пробы) | < 8 с | **измерено 4.1 с** без прав администратора (21 проба, 175 тыс. файлов в temp); elevated добавляет DISM, 3–6 с |
 | Diff двух снимков | < 500 мс | |
 | RSS при MFT-скане 1.2 млн | **< 250 МБ** | SoA-массивы обязательны |
 | RSS при walk-скане 1.2 млн | < 400 МБ | **измерено 349 МБ** пик. Живой снимок при этом 103 МБ (68 байт/узел) — остальное транзиентный GC-хип фазы обхода. Путь к снижению: интернирование имён уже сделано, дальше — сборка снимка потоком, а не после обхода. |
