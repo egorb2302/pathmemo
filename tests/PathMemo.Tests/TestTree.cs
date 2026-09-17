@@ -48,6 +48,26 @@ internal sealed class TestTree
         return this;
     }
 
+    /// <summary>
+    /// Adds many siblings at once, for the tests that need a directory too large to spell
+    /// out. Appends without the name lookup <see cref="File"/> does, which turns building
+    /// a 200 thousand entry directory from quadratic into linear.
+    /// </summary>
+    internal TestTree Fill(string directory, int count, Func<int, long> bytes)
+    {
+        var parent = Locate(directory);
+
+        for (var i = 0; i < count; i++)
+            parent.Children.Add(new Node
+            {
+                Name = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"f{i:D6}.bin"),
+                IsFile = true,
+                Bytes = bytes(i),
+            });
+
+        return this;
+    }
+
     /// <summary>Adds an empty directory.</summary>
     internal TestTree Directory(string path)
     {

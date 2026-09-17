@@ -124,6 +124,28 @@ internal static partial class Kernel32Extra
     [LibraryImport(Dll)]
     internal static partial uint GetConsoleOutputCP();
 
+    internal const int StdOutputHandle = -11;
+
+    /// <summary>ENABLE_PROCESSED_OUTPUT: required for anything escape-driven.</summary>
+    internal const uint EnableProcessedOutput = 0x0001;
+
+    /// <summary>
+    /// ENABLE_VIRTUAL_TERMINAL_PROCESSING: makes conhost interpret ANSI sequences.
+    /// Off by default for a console application, which is why the TUI has to ask.
+    /// </summary>
+    internal const uint EnableVirtualTerminalProcessing = 0x0004;
+
+    [LibraryImport(Dll, SetLastError = true)]
+    internal static partial nint GetStdHandle(int nStdHandle);
+
+    [LibraryImport(Dll, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetConsoleMode(nint hConsoleHandle, out uint lpMode);
+
+    [LibraryImport(Dll, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetConsoleMode(nint hConsoleHandle, uint dwMode);
+
     /// <summary>Expands 8.3 segments (<c>MIXPC~1</c>) so two spellings of one directory compare equal.</summary>
     [LibraryImport(Dll, EntryPoint = "GetLongPathNameW", SetLastError = true,
         StringMarshalling = StringMarshalling.Utf16)]

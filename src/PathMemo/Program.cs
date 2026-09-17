@@ -4,6 +4,7 @@ using PathMemo.Cli.Commands;
 using PathMemo.Cli.Interactive;
 using PathMemo.Config;
 using PathMemo.Platform;
+using PathMemo.Tui;
 
 namespace PathMemo;
 
@@ -42,6 +43,12 @@ internal static class Program
             if (cancellation.IsCancellationRequested) return;
             e.Cancel = true;
             cancellation.Cancel();
+
+            // Silent while the TUI owns the terminal: a line of stderr in the middle of a
+            // frame is exactly what README section 14.6 forbids, and the loop is about to
+            // exit and restore the screen anyway.
+            if (TuiHost.Active) return;
+
             Console.Error.WriteLine();
             Console.Error.WriteLine("stopping - press Ctrl+C again to abort immediately");
         };
@@ -57,11 +64,15 @@ internal static class Program
                 "history" => HistoryCommand.Run(ParseHistory(rest)),
                 "diff" => DiffCommand.Run(ParseDiff(rest)),
                 "doctor" => DoctorCommand.Run(),
+                "status" => StatusCommand.Run(),
                 "--version" or "-V" => PrintVersion(),
                 // No arguments: an interactive session if the window is ours to keep open
                 // (double-clicked from Explorer), otherwise plain help for a shell.
-                "--interactive" or "-i" => await Launcher.RunAsync(cancellation.Token),
-                "" when ConsoleOwnership.OwnsTheWindow => await Launcher.RunAsync(cancellation.Token),
+                "--interactive" or "-i" => await InteractiveAsync(cancellation.Token),
+                "" when ConsoleOwnership.OwnsTheWindow => await InteractiveAsync(cancellation.Token),
+                // A pipe gets the summary rather than the help text: something read this,
+                // and "here is how to use me" answers nothing (README section 14.5).
+                "" when Console.IsOutputRedirected => StatusCommand.Run(),
                 "" or "help" or "--help" or "-h" or "/?" => PrintUsage(),
                 _ => UnknownVerb(verb),
             };
@@ -98,6 +109,15 @@ internal static class Program
             Console.Out.Flush();
         }
     }
+
+    /// <summary>
+    /// The interactive session: the real screens when the terminal can host them, and the
+    /// line-based menu when it cannot (README sections 2.1, 14.5). The fallback is not a
+    /// formality - a host without VT processing would render the frame as literal escape
+    /// sequences, which is worse than no TUI at all.
+    /// </summary>
+    private static async Task<int> InteractiveAsync(CancellationToken ct) =>
+        TuiHost.TryRun(ct, out var code) ? code : await Launcher.RunAsync(ct);
 
     private static void ConfigureConsole()
     {
@@ -348,8 +368,9 @@ internal static class Program
               pathmemo <command> [options]
 
             COMMANDS
-              (none)              interactive session, when launched from Explorer
-              --interactive, -i   interactive session, forced
+              (none)              the screens, when launched from Explorer or with -i
+              --interactive, -i   the screens, forced (needs a real terminal)
+              status              volumes, last scan and store, as plain text
               scan [<path>...]    traverse the given roots, or every fixed volume
               tree [<path>]       one level of the last scan, largest first
               top [options]       largest files or directories, with filters
