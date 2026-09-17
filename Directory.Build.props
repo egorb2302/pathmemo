@@ -1,0 +1,28 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- net9.0-windows (not plain net9.0) so the heavy P/Invoke surface does not
+         produce CA1416 platform-compatibility noise on every Win32 call.
+         1809 = 10.0.17763.0 is the floor stated in README section 1. -->
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <Product>pathmemo</Product>
+    <Company>pathmemo</Company>
+    <Copyright>pathmemo contributors</Copyright>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+
+    <Deterministic>true</Deterministic>
+    <DebugType>embedded</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>pathmemo</AssemblyName>
+    <RootNamespace>PathMemo</RootNamespace>
+
+    <!-- Raw MFT parsing and Struct-of-Arrays node storage need spans over
+         unmanaged buffers (README section 5.3, 17.3). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Short-lived CLI process: workstation non-concurrent GC keeps RSS lowest.
+         README section 17.3 budgets 250 MB at 1.2M files. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+
+    <!-- Avoids loading ICU (~30 MB) and keeps path comparison culture-free.
+         All path matching is invariant by design (README section 12.2). -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- <ApplicationIcon>Resources\app.ico</ApplicationIcon> -->
+
+    <!-- Trimming stays viable because there is no reflection-heavy dependency
+         (README section 18): no Dapper, no DbUp, no Terminal.Gui. -->
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+
+  <!-- P0 deliberately has zero package references so the first build cannot be
+       blocked by a dependency API surprise. System.CommandLine and
+       Spectre.Console are added in P1, verified against the restored package. -->
+
+</Project>

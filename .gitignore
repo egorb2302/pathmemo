@@ -1,0 +1,35 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+dist/
+artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vscode/*
+!.vscode/launch.json
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+coverage/
+
+# NuGet
+*.nupkg
+packages/
+
+# OS
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Local scratch
+scratch/
+*.pmsnap
+*.log
