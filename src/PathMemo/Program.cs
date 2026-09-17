@@ -1,7 +1,9 @@
 using System.Text;
 using PathMemo.Cli;
 using PathMemo.Cli.Commands;
+using PathMemo.Cli.Interactive;
 using PathMemo.Config;
+using PathMemo.Platform;
 
 namespace PathMemo;
 
@@ -41,6 +43,10 @@ internal static class Program
                 "history" => HistoryCommand.Run(),
                 "doctor" => DoctorCommand.Run(),
                 "--version" or "-V" => PrintVersion(),
+                // No arguments: an interactive session if the window is ours to keep open
+                // (double-clicked from Explorer), otherwise plain help for a shell.
+                "--interactive" or "-i" => await Launcher.RunAsync(cancellation.Token),
+                "" when ConsoleOwnership.OwnsTheWindow => await Launcher.RunAsync(cancellation.Token),
                 "" or "help" or "--help" or "-h" or "/?" => PrintUsage(),
                 _ => UnknownVerb(verb),
             };
@@ -174,6 +180,7 @@ internal static class Program
     {
         Console.Error.WriteLine($"pathmemo: unknown command '{verb}'");
         Console.Error.WriteLine("Run 'pathmemo help' for usage.");
+        if (ConsoleOwnership.OwnsTheWindow) Launcher.Pause();
         return ExitCode.Usage;
     }
 
@@ -186,6 +193,8 @@ internal static class Program
               pathmemo <command> [options]
 
             COMMANDS
+              (none)              interactive session, when launched from Explorer
+              --interactive, -i   interactive session, forced
               scan [<path>...]    traverse the given roots, or every fixed volume
               tree [<path>]       one level of the last scan, largest first
               top [options]       largest files or directories, with filters
