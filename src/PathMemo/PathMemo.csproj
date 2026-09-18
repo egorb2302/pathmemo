@@ -40,11 +40,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The only package reference in the application, added in P4 (README section 18).
-         Manual SqliteDataReader mapping, no Dapper: reflection would cost trimming.
-         It brings the single native dependency, e_sqlite3.dll, which the single-file
-         host extracts once per version (README section 19.2). -->
+    <!-- Two package references, and no more (README section 18). Manual
+         SqliteDataReader mapping, no Dapper: reflection would cost trimming. Sqlite
+         brings the single native dependency, e_sqlite3.dll, which the single-file host
+         extracts once per version (README section 19.2). System.IO.Hashing is pure
+         managed code and brings nothing with it - which is the whole argument for
+         XxHash128 over BLAKE3 (README section 8.2). -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="System.IO.Hashing" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>

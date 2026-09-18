@@ -11,6 +11,7 @@ internal enum ViewKind
     Overview,
     Tree,
     Reclaim,
+    Dupes,
 }
 
 /// <summary>

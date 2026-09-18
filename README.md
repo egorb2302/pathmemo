@@ -35,13 +35,13 @@ Administrator rights are optional but change what the tool can see: with them th
 | P5 | TUI: Overview + Tree, own renderer, `status` | **done** — 0.1–0.6 ms per frame, 56 ms to search 1.58M nodes |
 | P6 | Deletion: PathGuard, HandleTreeDeleter, quarantine, journal, `rm` / `restore` / `purge` / `ops`, `audit --apply` | **done** — canary intact after 10k junction-swap races (19,478 swaps, 114 s) |
 | P7 | Reclaim rules: 31 rules as data, two axes, `reclaim` / `--rule` / `--apply`, keep-list, TUI screen 4 and badges | **done** — 1.2M nodes matched and 1,800 matches guard-checked in 2.5 s |
-| P8 | Duplicates | not started |
+| P8 | Duplicates: five stages, hash cache, `dupes` / `--group` / `--apply`, TUI screen 5 | **done** — stage 0 cut 1.23M files to 8,508 candidates in 0.44 s |
 | P9 | USN incremental scan, scheduling | not started |
 | P10 | Polish, NativeAOT | not started |
 
-254 tests green.
+296 tests green.
 
-**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20).
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6).
 
 ---
 
@@ -670,7 +670,8 @@ Eviction is LRU by `last_used_at`, hard-capped at 200k rows (~30 MB). Changing `
 ### 8.4. Operation safety
 
 - **At least one file always survives a group.** The UI refuses to unmark the last one; the CLI exits `EX_UNSAFE`.
-- **The "original" is never chosen automatically without showing it.** Priority: not in `Temp`/`Downloads`/caches; shallower path; a `keep` match always wins; older `mtime` last. "Oldest file" alone was rejected — the oldest is usually the one in `Downloads\tmp`.
+- **A file with more than one name is never offered.** Deleting one link of a hard-linked file frees nothing, so it cannot be a copy worth removing — and it is the *best* survivor, because keeping it costs nothing and leaves the copies that do free their bytes on offer. This is the hard-link set problem one level down, and it was found by running the thing (§8.6).
+- **The "original" is never chosen automatically without showing it.** Priority: a `keep` match always wins; then a multiply-linked file; then not in `Temp`/`Downloads`/caches; then the shallower path; older `mtime` last. "Oldest file" alone was rejected — the oldest is usually the one in `Downloads\tmp`.
 - **Everything is re-verified before deletion.** Size, mtime and the full hash of both survivor and victim are recomputed; any mismatch cancels the whole operation.
 - Duplicates are searched **across volumes** (photos backed up to D: with the originals on C:).
 - Files are opened with `FileShare.ReadWrite | FileShare.Delete` (otherwise half of `AppData` is unreadable) and `FILE_FLAG_SEQUENTIAL_SCAN`.
@@ -690,6 +691,26 @@ pathmemo will not change your security settings.
 
   [Enter] Continue    [S] Skip files over 1 GB    [Esc] Cancel
 ```
+
+`pathmemo dupes --estimate` asks the same question and answers it without reading anything: stage 0 works from the snapshot, so the size of the job is knowable before the job starts.
+
+### 8.6. Implementation notes (P8)
+
+- **Stage 1 happens on the handle stage 2 already opened.** The snapshot format carries no file identity (§5.3), so "these two names are one file" cannot be decided from it at all — but the handle that has to be opened to hash the bytes answers it for the cost of one `FILE_ID_INFO` call, before a single byte is read. So the order on the page is the order in the code, and hard links cost a pass over nothing.
+- **Grouped by logical size, reported in allocated bytes.** Two identical files on volumes with different cluster sizes occupy different numbers of bytes and the same number of bytes of content. Content length is what makes them comparable; allocated is what deleting one gives back (§3.1).
+- **Stage 0 builds no paths.** Candidates are collected as node indices and a path is materialised only for a size more than one file shares — which on a real disk is a small minority. A million `GetPath` calls would cost more than the hashing.
+- **Stage 4 compares against a representative, not every pair.** Equality is transitive: a file that matches the representative matches everything else that does, and one that does not starts a class of its own. N files cost N−1 comparisons where they really are identical, instead of the N(N−1)/2 that "pairwise" suggests.
+- **Unknown is not equal.** A file that cannot be read during the byte-for-byte stage is put in a class of its own, never merged into one. The failure direction matters: the alternative is deleting a file because the copy meant to replace it could not be opened.
+- **Cloud placeholders are refused twice.** The scan's own `CloudOnly` flag is the check before opening; `FILE_FLAG_OPEN_NO_RECALL` plus a `FILE_ATTRIBUTE_RECALL_ON_*` test on the handle is the check for a file that became a placeholder since (threat T10).
+- **The hash cache counts in Unix seconds, and the column says so.** The snapshot's timestamps use a 2000 epoch (§5.3); reading one as the other is exactly the bug that survived all of P6 (§9.9), so the conversion lives in one place, next to the only table that stores the other kind.
+- **The re-check before deletion cancels everything, not the one file.** Size, modification time, link count and the full hash of the survivor and of every copy about to go are recomputed from the disk as it is now. One mismatch stops the whole operation: if the disk moved under the search, every other conclusion it reached is suspect too. Modification times compare with two seconds of slack, because the snapshot stores seconds and NTFS stores ticks.
+- **The run is stored as a cache of one.** `dupe_runs` keeps the last search and no more: a scan is worth keeping because it answers "what changed", and twelve duplicate runs answer nothing. Saving one deletes the one before it. A reloaded group carries the total it measured rather than recomputing it, because per-file allocated size is not a column (§11).
+- **One file at a time on a spinning disk.** The degree comes from the medium of the snapshot's volumes, as it does for the walk scanner (§4.4): several threads seeking across a platter run slower than one reading in order, and past four queues an SSD gains nothing from a pure sequential-read workload.
+- **The screen shows the last run and never starts one.** Pressing `5` must not begin reading two hundred gigabytes. `r` starts a search in the ordinary console, where the notice of §8.5 and its progress line belong (§14.6).
+- **In the TUI a mark means "delete this copy"**, as it does on every other screen, and the screen refuses to mark the last unmarked file of a group. That is §8.4's rule in this screen's vocabulary; `Keeper.Survives` enforces it again in the core before anything reaches a deletion.
+- **The command:** `--min` `--max` `--under` `--ext` `--hash` `--limit` `--group` `--all` `--paths-only` `--cached` `--estimate` `--no-verify` `--no-cache` `--same-volume` `--dry-run` `--apply` `--mode` `--yes` `--json`. `--apply` hands the copies to the same `rm` a user would type, so the guard, the confirmation, the journal and the free-space measurement are the ones from §9.
+- **What it costs, measured.** On a real C: (1,228,950 files, 187 GB): stage 0 produced 8,508 candidates worth 53.3 GB in 0.44 s, and the run took **5m18s** reading **39.6 GB** — less than the candidates add up to, because the hard-link collapse and the partial hash remove work before the full hash pays for it. It found 1,347 duplicate groups (3,431 files, **9.94 GB**) and 1,249 hard-link sets that it kept out of that total. A second run over the same disk: **1m29s** and 21.3 GB, with 3,458 full hashes served from the cache and the same 1,347 groups out the other end. What the cache cannot remove is the partial-hash pass and stage 4, which reads both sides of every finalist — that is the price of the guarantee, and `--no-verify` is where it is refused.
+- **What running it found.** The first live run offered a hard-linked name as a deletable copy: stage 1 had collapsed the pair correctly, but the survivor it left behind then competed as an ordinary duplicate and the row claimed back bytes that deleting it could never produce. Hence the rule in §8.4 — and a group that now keeps the linked file and offers the standalone copy instead, which is both safe and worth more.
 
 ---
 ## 9. Deletion
@@ -1073,7 +1094,7 @@ Snapshot writing batches 20k rows for aggregates and runs `PRAGMA wal_checkpoint
 - **`integrity_check` only after a dirty exit**, via the `.clean` marker; on a real database it takes milliseconds and never runs in a normal cycle.
 - **`--no-save` writes not one row.** Otherwise a scripted JSON export would quietly fill up the history.
 - **Aggregates.** Eight categories, plus the 250 largest extensions and a `(rest)` row — a full disk has tens of thousands of distinct suffixes. The category is inherited from the directory (`C:\Windows` → system, `node_modules` → cache) and only then taken from the extension: `C:\Windows` is full of `.wav` files that are not the user's media. NTFS metafiles at a volume root are system too, but only at the root — a user file is entitled to be called `$draft`. Computed once per scan and sent to the database, the `By category` block and the JSON alike. On a real C: (walk, 1.22M files, 197 GB): system 62.5 GB, other 49.8, cache 34.5 (613k files), app 34.2, archive 12, source 2.6, media 1.7, document 0.2.
-- **Still NULL:** `metadata_bytes`, `usn_journal_id`, `next_usn` arrive with P9; `dupe_*` and `file_hashes` with P8. *P6:* `delete_ops`, `delete_items` and `dryrun_log` are written, and a deletion refuses to run at all when the database cannot be opened (§9.9).
+- **Still NULL:** `metadata_bytes`, `usn_journal_id`, `next_usn` arrive with P9. *P6:* `delete_ops`, `delete_items` and `dryrun_log` are written, and a deletion refuses to run at all when the database cannot be opened (§9.9). *P8:* `file_hashes` and the `dupe_*` tables are written. The hash table is capped at `duplicates.hashCacheMaxEntries` and trimmed oldest-use-first after every run; `dupe_runs` holds one row, because the last duplicate search is a cache and not history (§8.6).
 
 ---
 
@@ -1150,7 +1171,7 @@ pathmemo tree [<path>] [--scan <id>]       tree, largest first, non-interactive
 pathmemo top [options]                     largest files and folders, with filters
 pathmemo audit [--id <finding>] [--apply <finding>]
 pathmemo reclaim [options]                 cleanup recommendations (options: §7.3, §7.4)
-pathmemo dupes [options]                   duplicate search
+pathmemo dupes [options]                   duplicate search (options: §8.6)
 pathmemo rm <path>... [options]            deletion (quarantine by default)
 pathmemo restore <op-id>                   restore from quarantine
 pathmemo purge [<op-id>|--expired|--bin]   free what a quarantine (or the bin) holds
@@ -1182,6 +1203,8 @@ pathmemo doctor                            rights, USN, filesystem, database, ve
 *P6:* `--yes` works on `rm`, `purge` and `audit --apply`, and never answers the typed confirmation that a large permanent deletion demands - that is what `--confirm-token` is for. `--json` covers `rm`, as a plan before the fact or a result after it.
 
 *P7:* `--force` stops being a synonym for `--yes`. Anything a rule calls `Risk = Danger` — however the path arrived, typed at a prompt or marked in the tree — needs `--force` **and** the typed confirmation, and `--yes` answers neither. `--json` covers `reclaim` too.
+
+*P8:* `--json` covers `dupes`, and `--yes` there answers the read notice of §8.5 as well as the deletion question. `--paths-only` is on `dupes` too, so `dupes --paths-only | rm --from-stdin` is the same pipe `top` offers.
 
 *P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `--no-color` is not parsed as an option yet, but `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
 
@@ -1262,6 +1285,8 @@ pathmemo rm <path>...
 
 *P6:* `rm --json` emits the plan (with its token and every refusal and its reason) when nothing is to be done or `--dry-run` is given, and the per-item result otherwise.
 
+*P8:* `dupes --json` emits every group with its files, each carrying `keep`, `protected`, `linkCount` and the reason the survivor was chosen, plus a `totals` object that separates duplicates from hard-link sets.
+
 *P4:* the contract is pinned by tests on `scan --format json` and on CSV quoting. The writer is a hand-written `Utf8JsonWriter` with no serializer: reflection is what makes a trimmed build fail at runtime instead of at build time (§18).
 
 ---
@@ -1279,7 +1304,7 @@ pathmemo rm <path>...
 
 `1`…`5` switch. Modals: `Details`, `Confirm delete`, `Search`, `Help`, `Sort`.
 
-*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm`. `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in. *P7:* `4` is the reclaim screen; only `5` still names its phase.
+*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm`. `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in. *P7:* `4` is the reclaim screen. *P8:* `5` is the duplicates screen, and all five exist. It is the only screen that shows something no snapshot contains, so it shows the **last stored run** and starts one only on `r`, in the ordinary console - opening a screen must never begin reading the disk (§8.6).
 
 *P6:* the delete modal is its own view rather than a `Confirm`, because it has state: `Tab` cycles the mode and every line - what it frees now, what it frees on purge, what undo costs - is recomputed from a fresh plan, not patched. `L` lists the items and the guard's refusals. It hands off to the ordinary console to run, where the progress line, the confirmation and the free-space report belong (§14.6).
 
@@ -1334,6 +1359,8 @@ VIEW                               K      add to keep-list
                                    Q      quit
   Ctrl+C       cancel / quit  (standard behaviour, NOT hijacked)
 ```
+
+*P8:* on screen 5, `t` shows or hides the hard-link sets and `r` runs a search; `x` marks a copy for deletion and refuses on the last unmarked file of a group, and `K` puts a path on the keep list so it is never offered again.
 
 Bindings that were rejected: `Ctrl+C` for "copy path" — it is SIGINT, so a user with a hung network scan could not get out, and Windows Terminal intercepts it when there is a selection (`y` copies instead, like vim's yank); `Ctrl+Shift+C` — **intercepted by the terminal** in Windows Terminal, VS Code and ConEmu (`Y`); `Ctrl+1..6` for sorting — a digit with Ctrl has no VT sequence and cmd.exe does not deliver it (`s` opens a menu); `Ctrl+/` — delivered as `0x1F` only sometimes (`?`); `Ctrl+D` for delete — it is EOF and "page down" in most TUIs, a dangerous binding for a destructive act (`d` plus a dialog); `F10` to quit — conhost takes it as a menu, and tmux takes F-keys (`Q`).
 
@@ -1440,8 +1467,8 @@ Every row is a real scenario, not a theoretical one.
 | T7 | Local privilege escalation — a user-writable config read by an elevated process turns `logFilePath` into arbitrary write as admin | Elevated mode takes no paths from the config; DACL check; no "run a command" keys (§12.1) |
 | T8 | PATH hijacking — `vssadmin` or `dism` replaced on `PATH` | Absolute paths under `%WINDIR%\System32`, `UseShellExecute=false` (§15.4) |
 | T9 | ReDoS — a config regex against a million deep paths hangs the scan | Globs by default; regex only with `NonBacktracking` and a 50 ms timeout (§12.2) |
-| T10 | Hydrating cloud files — hashing a OneDrive placeholder **downloads** it, pulling 200 GB and filling the disk | `RECALL_ON_*`/`OFFLINE` checked before opening, plus `FILE_FLAG_OPEN_NO_RECALL` (§8.4) |
-| T11 | Losing the only copy — every file in a duplicate group unmarked | "At least one survives" enforced in the core, not the UI (§8.4) |
+| T10 | Hydrating cloud files — hashing a OneDrive placeholder **downloads** it, pulling 200 GB and filling the disk | `RECALL_ON_*`/`OFFLINE` checked before opening, plus `FILE_FLAG_OPEN_NO_RECALL` (§8.4). *P8:* two barriers, the scan's flag and the handle's attributes, and a test that asserts such a file is never opened |
+| T11 | Losing the only copy — every file in a duplicate group unmarked | "At least one survives" enforced in the core, not the UI (§8.4). *P8:* `Keeper.Survives` is consulted by the screen and by the command, and the command exits 6 rather than deleting |
 | T12 | Silent permanent deletion — a file over the Recycle Bin quota destroyed silently by the Shell | Our own quota check switches to Quarantine (§9.6) |
 | T13 | Leaking private data — an export is a full map of the disk: project names, people's names | `--redact` (hashed names, structure and sizes preserved); `logFilePaths: false` by default |
 | T14 | Corrupting our own database on power loss | WAL, `synchronous=NORMAL`, `integrity_check` **only after an unclean exit** |
@@ -1467,19 +1494,20 @@ pathmemo/
 │   │   ├── ArgParse.cs            value parsers: sizes, durations, dates, modes
 │   │   ├── Commands/              Scan, Tree, Top, Audit (+ AuditApply), History, Diff,
 │   │   │                          Doctor, Status (+ StatusReport, shared with Overview),
-│   │   │                          Rm, Quarantine (restore / purge / ops), Reclaim
+│   │   │                          Rm, Quarantine (restore / purge / ops), Reclaim, Dupes
 │   │   ├── Interactive/           Launcher, Browser, AuditView, ElevationPrompt
 │   │   │                          (line-based fallback for terminals without VT)
 │   │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv),
 │   │                              DeleteReport (plan, outcome, journal),
-│   │                              ReclaimTable (rules, one rule's paths, json)
+│   │                              ReclaimTable (rules, one rule's paths, json),
+│   │                              DupeTable (groups, one group, paths, json)
 │   │
 │   ├── Tui/
 │   │   ├── TuiHost.cs             input loop and render, suspended during a scan
 │   │   ├── TuiSession.cs          snapshot, size mode, marks, ITuiView
 │   │   ├── Terminal/              Screen (frame buffer + row diff), Line, KeyReader,
 │   │   │                          VirtualTerminal, TextWidth, Sanitizer, Draw
-│   │   ├── Screens/               OverviewScreen, TreeScreen, ReclaimScreen
+│   │   ├── Screens/               OverviewScreen, TreeScreen, ReclaimScreen, DupesScreen
 │   │   └── Dialogs/               Details, Confirm, Delete, SortMenu, Help
 │   │                              (search is TreeScreen state, not its own file)
 │   │
@@ -1506,7 +1534,9 @@ pathmemo/
 │   │                              AuditRunner; Probes/ (Vss, WinSxS, Wsl, Docker,
 │   │                              Hibernation, RecycleBin, Dumps, …)
 │   │
-│   ├── Duplicates/                DuplicateFinder, HashPipeline, ByteComparer, HashCache
+│   ├── Duplicates/                DuplicateModels (groups, the survivor rules),
+│   │                          DuplicateFinder (the five stages), HashPipeline (open,
+│   │                          identify, hash), ByteComparer (stage 4), HashCache
 │   │
 │   ├── Deletion/
 │   │   ├── PathGuard.cs           CRITICAL: open first, judge the handle
@@ -1527,7 +1557,8 @@ pathmemo/
 │   │                              Schema.sql (embedded, all of §11), ScanCatalog
 │   │                              (file-vs-row reconciliation, id allocation),
 │   │                              ScanRecords, ScanRepository, AuditRepository,
-│   │                              DeleteRepository (ops, items, dry runs)
+│   │                              DeleteRepository (ops, items, dry runs),
+│   │                              DupeRepository (the last duplicate run)
 │   │
 │   └── Config/                    AppPaths, AppConfig (+ DACL check when elevated),
 │                                  PathGlob (one syntax, ** and %VARS%), DefaultRules
@@ -1574,9 +1605,9 @@ RSS under 250 MB at a million files is reachable **only** if:
 | CLI parser | ~~System.CommandLine~~ → **own parsing** | **Not needed.** Ten commands with flat options are a 40-line `switch` plus `ArgParse`; the package would generate help that is written by hand here and more accurate, and would remain the main NativeAOT blocker (§19.4) |
 | Static output | ~~Spectre.Console~~ → **own** | **Not needed.** Our tables are three or four row formats with fixed columns, static output uses no colour at all, and progress is one rewritten line |
 | TUI | **own renderer** (§18.1, §14.7) | `ReadConsoleInputW` was not needed either: the BCL parses both VT sequences and virtual-key records |
-| SQLite | **Microsoft.Data.Sqlite**, hand-written mapping | Dapper is reflection, hostile to trimming and AOT. **The application's only PackageReference**; the trimmed single file grew from 19.5 to 22.5 MB |
+| SQLite | **Microsoft.Data.Sqlite**, hand-written mapping | Dapper is reflection, hostile to trimming and AOT. One of the application's **two** PackageReferences; the trimmed single file grew from 19.5 to 22.5 MB |
 | Migrations | **`PRAGMA user_version` + embedded .sql** | DbUp is overkill (25 lines of own code) and breaks trimming |
-| Hashing | **XxHash128** plus BCL `SHA256` | zero native dependencies (§8.2) |
+| Hashing | **XxHash128** (`System.IO.Hashing`) plus BCL `SHA256` | The second and last PackageReference, and the argument for it over BLAKE3: pure managed code, nothing native, nothing for trimming or AOT to trip over (§8.2) |
 | Snapshot compression | **`DeflateStream`** | in the box; Zstd would be 30% smaller and a native DLL |
 | Logging | **own `FileLogger`** (~80 lines) | Serilog pulls four packages and reflection for logs we send nowhere |
 | Clipboard | **P/Invoke + OSC 52** | no WinForms (§15.1) |
@@ -1601,7 +1632,7 @@ This project needs **one** complex screen (a virtualised tree), four simple ones
 
 | File | Size | Note |
 |---|---|---|
-| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), **23.0 MB at P5** — the whole TUI fit in 0.3 MB because it has no dependencies |
+| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — and **25.3 MB at P8**, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it |
 | `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
 | `pathmemo-win-x64.zip` | **10.6 MB** | exe + README + LICENSE, built by `build\publish.ps1 -Zip` |
 
@@ -1678,7 +1709,7 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 | RSS during a walk scan | < 400 MB | **373 MB** peak working set (380 MB at P3, 478 MB with the first aggregates, 535 MB before file ids moved out of `RawEntry`). The live snapshot is 94 MB of that; the rest is transient GC heap |
 | RSS in the TUI with a snapshot open | < 150 MB | **not met: 182–201 MB** with a 1.58M-node snapshot open. The tree is 94 MB, and decompression doubles it: `SnapshotFile.Read` materialises each section into a whole `byte[]` before copying. Fixed by lazy section loading in P10. The early 103 MB estimate used a snapshot half the size and ignored the transient |
 | Data directory size | **< 500 MB always** | hard limit |
-| Duplicate search over 200 GB | IO-bound | about the cost of reading 200 GB |
+| Duplicate search, 1.2M files / 187 GB on C: | IO-bound | **5m18s**: stage 0 turned 1,228,950 files into 8,508 candidates in 0.44 s, and the disk did the rest — 39.6 GB read at ~125 MB/s with Defender on, not the 53.3 GB the candidates add up to, because the partial hash and the hard-link collapse take their share first. 1,347 duplicate groups (3,431 files, 9.94 GB) and 1,249 hard-link sets held out of the total. Second run, same disk: **1m29s** and 21.3 GB, 3,458 hashes from the cache |
 
 ---
 
@@ -1728,12 +1759,12 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] Risk `danger` needs `--force` plus a typed confirmation, wherever the path came from; exit code 6 without it.
 - [ ] The estimate is within 10% of what a real cleanup frees on a machine with a pnpm store and a Unity project — the hard-link case is deliberately conservative (§7.5) and has not been measured against a real one.
 
-**Duplicates** (all P8)
-- [ ] A hard-link set is shown apart from duplicates, with a saving of 0.
-- [ ] Cloud-only files are never hashed (verified by the absence of network traffic).
-- [ ] The last file in a group cannot be unmarked, in the UI or the CLI.
-- [ ] Byte-for-byte verification runs before deletion; a swapped file aborts it.
-- [ ] Duplicates are found across C: and D:.
+**Duplicates**
+- [x] A hard-link set is shown apart from duplicates, with a saving of 0 — and a hard-linked *name* is never offered inside an ordinary group either, which the first live run had to teach us (§8.6).
+- [x] Cloud-only files are never hashed — refused from the scan's flag before opening and from the handle's attributes after, and a test asserts that such a file is never even opened.
+- [x] The last file in a group cannot be unmarked, in the UI or the CLI — `Keeper.Survives` in the core, exit code 6 from the command, a refusal with a reason on the screen.
+- [x] Byte-for-byte verification runs before deletion; a swapped file aborts it — the whole operation, not the one file, verified live by editing a copy between the search and `--apply` (exit code 6).
+- [x] Duplicates are found across volumes, and `--same-volume` stops it — asserted over a two-volume snapshot, and run for real with one copy on C: and one on D:: found together, and not found at all under `--same-volume`.
 
 **CLI**
 - [x] Redirected stdout disables the TUI and prints `status`.
@@ -1775,6 +1806,8 @@ Pure logic, no filesystem: `RuleEngine` (glob matching, variable expansion, `kee
 
 *P7:* the rules over synthetic trees — 26 tests: a rule matching anywhere, a match inside another match (within a rule and across two), the sibling and child conditions that separate a Unity project from any other `Library` and a virtual environment from a folder of videos, the age and size floors, a veto pattern, a hard-linked file counted as shared, an alias adding a name and no bytes, the keep list, a reparse point never matched, the store never recommended, an extension pattern not claiming a directory, a wildcard inside a segment, which rule wins when two claim a node, the risk ceiling, `RiskOf`, disabled and replaced rules, a custom rule out of `config.json` and a broken one skipped, and two properties of the whole built-in set: every `Command` rule names its command, and none of them claims anything on the "deliberately not rules" list. The reclaim screen — 9 tests that press keys and read the frame, including that the first frame is drawn before the background pass has finished. The filesystem half is in §22.2.
 
+*P8:* the survivor rules over paths alone — a keep match beating everything, a hard-linked file beating an ordinary one, `Downloads` losing to anywhere else, then depth, then date; and the invariant, which refuses both a group with every copy marked and a marked path the keep list claims. The duplicates screen — 11 tests that press keys and read the frame: the order, the marks the screen opens with, marking the last copy being refused, a hard-link set hidden until `t`, `K` writing the configuration and unmarking, and `d` re-checking before it offers a dialog. The rest of the module needs real files and is in §22.2.
+
 *P5:* the terminal layer — 15 tests: CJK, emoji and combining-mark widths, `Fit` landing on exactly N columns, sanitisation, frame row diffing (an identical frame writes nothing, a changed row writes only itself), the erase-before-write order, colour suppression, sparkline scaling. The Tree screen — 14 tests that press keys and read the frame: row order, descending and returning to the same row, the size mode on a hard-link alias, the filter, search jumping into the match's directory, marks, refusing `.exe`, details, alignment under `U+202E` and CJK, a 200k-entry directory drawing exactly one page, `g`/`G`, narrowing to 80 columns. Frames are asserted as uncoloured text: assertions about escape sequences would test the colour scheme, not the behaviour.
 
 ### 22.2. What is integration-tested against a real filesystem
@@ -1799,6 +1832,8 @@ It checks traversal, sizes, dedup, errors, and above all **that deletion never l
 *P6:* the twelve spellings of a protected path, each opened against the real machine, plus the property they rest on — the aliases of one directory canonicalise to one name. A tree deleted around a junction, with the junction's target untouched afterwards. A read-only file. A file another process holds open, unlinked while that handle still reads its data. Quarantine, restore, a restore refused because something took the name back, and purge. A dry run that moves nothing and lands in the right table. The scan-verification refusal, and its opposite. A file whose size is not a whole number of clusters — a regression that once rejected most files. One real item into the Recycle Bin through `IFileOperation`, because the apartment, the sink and the copy engine's own success codes cannot be faked.
 
 *P7:* the three things a synthetic tree cannot show. That the report never promises what the guard refuses: one rule pointed at a name the real system directory also has, with one match it may offer, one the guard refuses and one that has gone since the scan. That a contents-only rule hands over the children and not the directory. That `config.json` survives being edited by `K` and `--keep`: an unknown section is still there afterwards, a second `K` on the same path is not an error, and a rule disabled and enabled again leaves the file as it was.
+
+*P8:* the whole funnel against real files — three copies of one file becoming one group that gives back two; two files of one size that differ; a size nothing shares never being opened at all; a hard-link set through `CreateHardLink`, apart from the duplicates and freeing nothing; a real copy beside a hard-link set still being a duplicate; the byte-for-byte stage splitting a group a hash had agreed about, including the counter that says it happened; the re-check refusing the whole operation after one copy is edited, and refusing a name out of a hard-link set; the hash cache answering a second run without reading the files, and the same groups coming out of it; a run stored and read back with its totals, and a second run replacing the first; and `sha256` finding what `xxh128` finds. Cloud placeholders are tested through a snapshot that claims them, because a real one needs a cloud provider and would be a test of OneDrive.
 
 ### 22.3. Race test for T2
 

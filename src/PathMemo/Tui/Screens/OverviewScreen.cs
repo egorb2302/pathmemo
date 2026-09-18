@@ -98,7 +98,7 @@ internal sealed class OverviewScreen : ITuiView
 
         Draw.Hints(screen, screen.Height - 1,
             ("up/down", "volume"), ("enter", "browse"), ("3", "audit"), ("4", "reclaim"),
-            ("F5", "rescan"), ("?", "help"), ("Q", "quit"));
+            ("5", "dupes"), ("F5", "rescan"), ("?", "help"), ("Q", "quit"));
     }
 
     private static int LastScan(Screen screen, TuiSession session, int y, int bottom)

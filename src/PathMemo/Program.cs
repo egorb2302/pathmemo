@@ -62,6 +62,7 @@ internal static class Program
                 "top" => TopCommand.Run(ParseTop(rest)),
                 "audit" => AuditCommand.Run(ParseAudit(rest), cancellation.Token),
                 "reclaim" => ReclaimCommand.Run(ParseReclaim(rest), cancellation.Token),
+                "dupes" or "duplicates" => DupesCommand.Run(ParseDupes(rest), cancellation.Token),
                 "rm" or "delete" => RmCommand.Run(ParseRm(rest), cancellation.Token),
                 "restore" => QuarantineCommands.Restore(ParseOpId(rest)),
                 "purge" => QuarantineCommands.Purge(ParsePurge(rest), cancellation.Token),
@@ -391,6 +392,48 @@ internal static class Program
         return options;
     }
 
+    private static DupesOptions ParseDupes(string[] args)
+    {
+        var options = new DupesOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--scan": options = options with { ScanId = ArgParse.Id(ArgParse.Value(args, ref i)) }; break;
+                case "--min": options = options with { MinBytes = ArgParse.Size(ArgParse.Value(args, ref i)) }; break;
+                case "--max": options = options with { MaxBytes = ArgParse.Size(ArgParse.Value(args, ref i)) }; break;
+                case "--under": options = options with { Under = ArgParse.Value(args, ref i) }; break;
+                case "--ext": options = options with { Extensions = ArgParse.Extensions(ArgParse.Value(args, ref i)) }; break;
+                case "--hash": options = options with { Algorithm = ParseHash(ArgParse.Value(args, ref i)) }; break;
+                case "--limit": options = options with { Limit = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--group": options = options with { Group = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--all": options = options with { All = true }; break;
+                case "--paths-only": options = options with { PathsOnly = true }; break;
+                case "--cached": options = options with { Cached = true }; break;
+                case "--estimate": options = options with { Estimate = true }; break;
+                case "--no-verify": options = options with { NoVerify = true }; break;
+                case "--no-cache": options = options with { NoCache = true }; break;
+                case "--same-volume": options = options with { SameVolume = true }; break;
+                case "--json": options = options with { Json = true }; break;
+                case "--dry-run" or "-n": options = options with { DryRun = true }; break;
+                case "--apply": options = options with { Apply = true }; break;
+                case "--mode": options = options with { Mode = ParseMode(ArgParse.Value(args, ref i)) }; break;
+                case "--permanent": options = options with { Mode = Deletion.DeleteMode.Permanent }; break;
+                case "--yes" or "-y": options = options with { Yes = true }; break;
+                case "--force": options = options with { Force = true }; break;
+                default: throw new ArgumentException($"unexpected argument '{args[i]}'");
+            }
+        }
+
+        return options;
+    }
+
+    private static Duplicates.HashKind ParseHash(string value) =>
+        Duplicates.HashKinds.TryParse(value, out var kind)
+            ? kind
+            : throw new ArgumentException($"--hash must be xxh128 or sha256, not '{value}'");
+
     private static Audit.Risk ParseRisk(string value) =>
         Analysis.ReclaimNames.TryRisk(value, out var risk)
             ? risk
@@ -506,6 +549,7 @@ internal static class Program
               top [options]       largest files or directories, with filters
               audit [options]     space no scan can see: restore points, WinSxS, WSL, caches
               reclaim [options]   what is worth deleting, by rule, with risk and recovery
+              dupes [options]     files stored twice, proved byte for byte
               rm <path>...        delete, into quarantine by default
               restore <op-id>     put a quarantined operation back
               purge [<op-id>]     free the space a quarantine is holding
@@ -593,6 +637,30 @@ internal static class Program
               Rules whose remedy is another tool's command (git gc, docker prune) are
               reported and never deleted, whatever the flags say.
 
+            dupes
+              --scan <id>         which stored scan to read (default: newest)
+              --min <size>        ignore files below this (default 1MB)
+              --max <size>        and above this
+              --under <path>      restrict to a subtree
+              --ext <a,b,c>       e.g. jpg,mp4,iso
+              --hash <algo>       xxh128 (default) | sha256, for comparing with other tools
+              --limit <n>         groups listed (default 25)
+              --group <n>         the files of one group, as numbered in the table
+              --all               every group with its files
+              --paths-only        the extra copies, one path per line, for pipes
+              --cached            show the last run instead of reading the disk again
+              --estimate          say how much a search would read, and read nothing
+              --no-verify         trust the hash; skip the byte-for-byte stage
+              --no-cache          do not read or write the stored hashes
+              --same-volume       do not match files across volumes
+              --dry-run, -n       the deletion plan and a confirmation token
+              --apply             delete every copy but the keeper, through 'rm'
+              --mode <mode>       quarantine (default) | recycle | permanent
+              --yes, -y           skip the y/n question and the read notice
+              --json              machine-readable report
+              Every group keeps one file, chosen by the rules of README section 8.4 and
+              shown before anything happens. Cloud-only files are never read.
+
             rm
               --mode <mode>       quarantine | recycle | permanent (default: config)
               --permanent         same as --mode permanent
@@ -616,7 +684,7 @@ internal static class Program
               --limit <n>         rows to show (default 20)
 
             Not implemented yet (see README.md for the full command set):
-              dupes, errors, export, schedule, config
+              errors, export, schedule, config
             """);
         return ExitCode.Ok;
     }

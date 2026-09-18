@@ -178,6 +178,12 @@ internal sealed class TestTree
             NameBlob = names.ToBlob(), Roots = store.Roots,
         };
 
+        // Each root is its own volume, which is what makes a cross-volume question
+        // askable at all. Parents precede children in this order, so one pass carries it
+        // down (README section 5.3).
+        for (var i = 0; i < _roots.Count; i++) built.VolumeIndex[i] = (byte)i;
+        for (var i = _roots.Count; i < n; i++) built.VolumeIndex[i] = built.VolumeIndex[built.Parent[i]];
+
         TreeAssembly.Aggregate(built);
         return built;
     }

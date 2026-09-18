@@ -101,6 +101,20 @@ internal static partial class Kernel32Extra
     internal const uint FileFlagBackupSemantics = 0x02000000;
     internal const uint FileFlagOpenReparsePoint = 0x00200000;
 
+    /// <summary>Tells the cache this file is read front to back, which is what hashing does.</summary>
+    internal const uint FileFlagSequentialScan = 0x08000000;
+
+    /// <summary>
+    /// Opens a cloud placeholder without hydrating it. The second barrier around
+    /// threat T10: a read then fails instead of downloading the file (README section 8.4).
+    /// </summary>
+    internal const uint FileFlagOpenNoRecall = 0x00100000;
+
+    // Attributes that mean "the bytes are not on this disk".
+    internal const uint FileAttributeOffline = 0x00001000;
+    internal const uint FileAttributeRecallOnOpen = 0x00040000;
+    internal const uint FileAttributeRecallOnDataAccess = 0x00400000;
+
     internal const uint IoctlStorageQueryProperty = 0x002D1400;
 
     /// <summary>NTFS_VOLUME_DATA_BUFFER: $MFT size and cluster geometry, no elevation needed.</summary>

@@ -125,6 +125,8 @@ internal static class TreeQuery
     }
 
     /// <summary>Every node under <paramref name="root"/>, including it.</summary>
+    internal static HashSet<int> Subtree(NodeStore tree, int root) => SubtreeRange(tree, root);
+
     private static HashSet<int> SubtreeRange(NodeStore tree, int root)
     {
         var set = new HashSet<int>();

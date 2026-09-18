@@ -5,6 +5,7 @@ using System.Text.Json;
 using PathMemo.Analysis;
 using PathMemo.Audit;
 using PathMemo.Deletion;
+using PathMemo.Duplicates;
 using PathMemo.Platform;
 
 namespace PathMemo.Config;
@@ -38,6 +39,25 @@ internal sealed record DeleteSettings
     internal bool AutoPurgeExpired { get; init; } = true;
     internal long RequireTypedConfirmationOverBytes { get; init; } = 1L << 30;
     internal bool VerifyBeforeDelete { get; init; } = true;
+}
+
+/// <summary>Thresholds for the duplicate search (README sections 8, 12).</summary>
+internal sealed record DuplicatesSettings
+{
+    internal long MinSize { get; init; } = 1L << 20;
+    internal HashKind HashAlgorithm { get; init; } = HashKind.Xxh128;
+    internal long BufferSize { get; init; } = 1L << 20;
+    internal long PartialHashBytes { get; init; } = 64L << 10;
+
+    /// <summary>
+    /// Stage 4. Off, the answer is "almost certainly identical"; on, it is "identical".
+    /// It defaults to on because what happens next is a deletion (README section 8.1).
+    /// </summary>
+    internal bool ByteForByteVerify { get; init; } = true;
+
+    internal bool CrossVolume { get; init; } = true;
+    internal bool SkipCloudOnly { get; init; } = true;
+    internal int HashCacheMaxEntries { get; init; } = 200_000;
 }
 
 /// <summary>
@@ -76,6 +96,7 @@ internal sealed class AppConfig
     internal ProtectSettings Protect { get; private init; } = new();
     internal DeleteSettings Delete { get; private init; } = new();
     internal RulesSettings Rules { get; private init; } = new();
+    internal DuplicatesSettings Duplicates { get; private init; } = new();
 
     /// <summary>Problems found while loading, printed once by the command that needs them.</summary>
     internal IReadOnlyList<string> Warnings { get; private init; } = [];
@@ -127,6 +148,7 @@ internal sealed class AppConfig
                 Protect = ReadProtect(document.RootElement, warnings),
                 Delete = ReadDelete(document.RootElement, warnings),
                 Rules = ReadRules(document.RootElement, warnings),
+                Duplicates = ReadDuplicates(document.RootElement, warnings),
                 Warnings = warnings,
                 Loaded = true,
             };
@@ -167,6 +189,29 @@ internal sealed class AppConfig
             RequireTypedConfirmationOverBytes = Number(delete, "requireTypedConfirmationOverBytes",
                 defaults.RequireTypedConfirmationOverBytes, warnings),
             VerifyBeforeDelete = Boolean(delete, "verifyBeforeDelete", defaults.VerifyBeforeDelete, warnings),
+        };
+    }
+
+    private static DuplicatesSettings ReadDuplicates(JsonElement root, List<string> warnings)
+    {
+        var defaults = new DuplicatesSettings();
+        if (!root.TryGetProperty("duplicates", out var dupes) || dupes.ValueKind != JsonValueKind.Object)
+            return defaults;
+
+        var algorithm = defaults.HashAlgorithm;
+        if (Text(dupes, "hashAlgorithm") is { } name && !HashKinds.TryParse(name, out algorithm))
+            warnings.Add($"config: 'duplicates.hashAlgorithm' must be xxh128 or sha256, not '{name}'");
+
+        return new DuplicatesSettings
+        {
+            MinSize = Number(dupes, "minSize", defaults.MinSize, warnings),
+            HashAlgorithm = algorithm,
+            BufferSize = Number(dupes, "bufferSize", defaults.BufferSize, warnings),
+            PartialHashBytes = Number(dupes, "partialHashBytes", defaults.PartialHashBytes, warnings),
+            ByteForByteVerify = Boolean(dupes, "byteForByteVerify", defaults.ByteForByteVerify, warnings),
+            CrossVolume = Boolean(dupes, "crossVolume", defaults.CrossVolume, warnings),
+            SkipCloudOnly = Boolean(dupes, "skipCloudOnly", defaults.SkipCloudOnly, warnings),
+            HashCacheMaxEntries = (int)Number(dupes, "hashCacheMaxEntries", defaults.HashCacheMaxEntries, warnings),
         };
     }
 
