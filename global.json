@@ -1,0 +1,8 @@
+{
+  "//": "Pins the toolchain to .NET 9. Without this the muxer picks the newest SDK on the machine, and a CI runner with .NET 10 preinstalled compiles the code with a different language version than any local build - which is how a green branch produced a red pipeline.",
+  "sdk": {
+    "version": "9.0.100",
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}

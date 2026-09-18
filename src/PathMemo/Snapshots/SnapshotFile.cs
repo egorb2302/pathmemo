@@ -188,7 +188,7 @@ internal static class SnapshotFile
 
         void Put<T>(T[] array) where T : unmanaged
         {
-            var bytes = MemoryMarshal.AsBytes<T>(array);
+            var bytes = MemoryMarshal.AsBytes(array.AsSpan());
             bytes.CopyTo(buffer.AsSpan(at));
             at += bytes.Length;
         }
@@ -216,7 +216,12 @@ internal static class SnapshotFile
         T[] Take<T>() where T : unmanaged
         {
             var array = new T[n];
-            var bytes = MemoryMarshal.AsBytes<T>(array);
+
+            // AsSpan() first, deliberately. AsBytes has a Span and a ReadOnlySpan overload,
+            // and an array argument picks the writable one only up to C# 13; C# 14's
+            // first-class span conversions make it choose ReadOnlySpan, and the copy below
+            // stops compiling. Naming the span keeps this building on any toolchain.
+            var bytes = MemoryMarshal.AsBytes(array.AsSpan());
             packed.AsSpan(at, bytes.Length).CopyTo(bytes);
             at += bytes.Length;
             return array;

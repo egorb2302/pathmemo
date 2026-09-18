@@ -1,175 +1,168 @@
 # pathmemo
 
-**Disk space screener for Windows.** Один `.exe`, без установки. Находит, куда ушло место, и безопасно освобождает его.
+**Disk space screener for Windows.** One `.exe`, no installer. Finds where the space went, and frees it safely.
 
-**Версия спецификации:** 3.0
-**Целевая платформа:** Windows 10 1809+ / Windows 11 (x64, arm64 — отдельные бинарники)
-**Язык интерфейса приложения:** английский (CLI, TUI, логи, экспорт). Этот документ — внутренняя спецификация на русском.
-**Статус реализации:**
+**Spec version:** 3.0
+**Target:** Windows 10 1809+ / Windows 11 (x64 and arm64, separate binaries)
+**Language:** English throughout — CLI, TUI, logs, exports, and this document.
 
-| Фаза | Содержание | Состояние |
+## Install
+
+Download the zip for your architecture from [Releases](../../releases), unpack it anywhere, run `pathmemo.exe`. Nothing is installed; nothing is written outside `%LOCALAPPDATA%\pathmemo`. The executable is not code-signed, so Windows warns about an unknown publisher: **More info → Run anyway**, or check the published SHA-256 first.
+
+```
+pathmemo                 # double-click, or run with no arguments: the TUI
+pathmemo scan            # scan every fixed volume
+pathmemo top --min 1GB   # largest files
+pathmemo audit           # where the invisible space went
+pathmemo diff            # what changed since the previous scan
+```
+
+Administrator rights are optional but change what the tool can see: with them the scanner reads `$MFT` directly — roughly 40x faster, and it sees paths a directory walk is denied (§4.1).
+
+## Status
+
+| Phase | Contents | State |
 |---|---|---|
-| P0 | Каркас, манифест, single-file publish, `doctor` | **готово** — 16.1 МБ exe с trimming |
-| P1 | Walk-сканер, формат `.pmsnap`, `scan` / `tree` / `top` / `history` | **готово** — 1.22 млн файлов за 41 с, 50 тестов зелёные |
-| P1+ | Интерактивный запуск двойным кликом: статус томов, меню, построчная навигация по дереву | **готово** — временная замена экранам Overview и Tree до P5 |
-| P2 | Space Audit: 21 проба, `audit` / `--id` / `--copy` / `--json`, пункт `[A]` в интерактивном меню, перезапуск с правами администратора `[E]` | **готово** — 4.1 с без прав администратора (16 проб отвечают без них), 76 тестов зелёные |
-| P3 | MFT-сканер (разбор `$MFT` напрямую), hardlink-дедупликация в обоих сканерах, ADS, сверка с томом, `--scanner`, предложение перезапуска с правами | **готово** — 1.27 млн файлов за 9.6 с, unaccounted 1.4 %, 92 теста зелёные |
-| P4 | SQLite (схема §11, `user_version`, WAL), история, `diff`, `--format json\|csv`, `--data-dir` | **готово** — импорт 4 снимков за 1.6 с, diff двух снимков по 1.6 млн узлов за 105 мс, 126 тестов зелёные |
-| P5 | TUI: Overview + Tree, свой рендерер, `status` | **готово** — кадр 0.1–0.6 мс, вход в каталог с 26 тыс. детей 10 мс, поиск по 1.58 млн узлов 56 мс, 155 тестов зелёные |
-| P6 | Удаление: PathGuard, HandleTreeDeleter, карантин | не начато |
-| P7 | Reclaim-правила | не начато |
-| P8 | Дубликаты | не начато |
-| P9 | USN-инкремент, расписание | не начато |
-| P10 | Полировка, NativeAOT | не начато |
+| P0 | Skeleton, manifest, single-file publish, `doctor` | **done** — 16.1 MB exe |
+| P1 | Walk scanner, `.pmsnap` format, `scan` / `tree` / `top` / `history` | **done** — 1.22M files in 41 s |
+| P1+ | Double-click session: volume status, menu, line-by-line navigation | **done** — stand-in until P5 |
+| P2 | Space Audit: 21 probes, `audit` / `--id` / `--copy` / `--json`, `[E]` restart elevated | **done** — 4.1 s unelevated (16 probes answer without rights) |
+| P3 | MFT scanner, hard-link dedup in both scanners, ADS, volume reconciliation, `--scanner` | **done** — 1.27M files in 9.6 s, 1.4% unaccounted |
+| P4 | SQLite (schema §11, WAL), history, `diff`, `--format json\|csv`, `--data-dir` | **done** — diff of two 1.6M-node snapshots in 105 ms |
+| P5 | TUI: Overview + Tree, own renderer, `status` | **done** — 0.1–0.6 ms per frame, 56 ms to search 1.58M nodes |
+| P6 | Deletion: PathGuard, HandleTreeDeleter, quarantine | not started |
+| P7 | Reclaim rules | not started |
+| P8 | Duplicates | not started |
+| P9 | USN incremental scan, scheduling | not started |
+| P10 | Polish, NativeAOT | not started |
 
-**Известные ограничения текущей сборки:** без прав администратора работает walk-сканер: часть путей недоступна, hardlink-дедупликация только для файлов ≥ 1 МБ (WinSxS завышен примерно на 1.5 ГБ), ADS не учитываются. С правами администратора всё три ограничения снимаются MFT-сканером. Инкрементального USN-скана пока нет (P9). `diff` требует двух полных снимков и предупреждает, когда они сняты разными сканерами: часть разницы тогда — не изменения на диске, а разница в том, что сканеры видят. TUI показывает и размечает, но ничего не удаляет: `d` и `K` называют фазу, в которой появятся (P6, P7); открытый снимок держит около 200 МБ памяти при бюджете 150 — лечится ленивой загрузкой секций в P10 (§20).
+156 tests green.
+
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. The TUI shows and marks but deletes nothing: `d` and `K` name the phase they arrive in. An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20).
 
 ---
 
-## Содержание
+## Contents
 
-1. [Назначение и принципы](#1-назначение-и-принципы)
-2. [Не-цели](#2-не-цели)
-3. [Модель дискового места](#3-модель-дискового-места)
-4. [Сканирование](#4-сканирование)
-5. [Формат снимка](#5-формат-снимка)
-6. [Space Audit — невидимое место](#6-space-audit--невидимое-место)
-7. [Reclaim — рекомендации по очистке](#7-reclaim--рекомендации-по-очистке)
-8. [Дубликаты](#8-дубликаты)
-9. [Удаление](#9-удаление)
-10. [История и diff](#10-история-и-diff)
-11. [Схема базы данных](#11-схема-базы-данных)
-12. [Конфигурация](#12-конфигурация)
+1. [Purpose and principles](#1-purpose-and-principles)
+2. [Non-goals](#2-non-goals)
+3. [The disk space model](#3-the-disk-space-model)
+4. [Scanning](#4-scanning)
+5. [Snapshot format](#5-snapshot-format)
+6. [Space Audit — the invisible space](#6-space-audit--the-invisible-space)
+7. [Reclaim — cleanup recommendations](#7-reclaim--cleanup-recommendations)
+8. [Duplicates](#8-duplicates)
+9. [Deletion](#9-deletion)
+10. [History and diff](#10-history-and-diff)
+11. [Database schema](#11-database-schema)
+12. [Configuration](#12-configuration)
 13. [CLI](#13-cli)
 14. [TUI](#14-tui)
-15. [Интеграция с ОС](#15-интеграция-с-ос)
-16. [Модель угроз и защитные меры](#16-модель-угроз-и-защитные-меры)
-17. [Архитектура кода](#17-архитектура-кода)
-18. [Технологический стек](#18-технологический-стек)
-19. [Формат поставки и сборка](#19-формат-поставки-и-сборка)
-20. [Бюджеты производительности](#20-бюджеты-производительности)
-21. [Критерии приёмки](#21-критерии-приёмки)
-22. [Тестирование](#22-тестирование)
-23. [Глоссарий](#23-глоссарий)
+15. [OS integration](#15-os-integration)
+16. [Threat model](#16-threat-model)
+17. [Code architecture](#17-code-architecture)
+18. [Technology stack](#18-technology-stack)
+19. [Packaging and build](#19-packaging-and-build)
+20. [Performance budgets](#20-performance-budgets)
+21. [Acceptance criteria](#21-acceptance-criteria)
+22. [Testing](#22-testing)
+23. [Glossary](#23-glossary)
 
 ---
 
-## 1. Назначение и принципы
+## 1. Purpose and principles
 
-pathmemo отвечает на два вопроса:
+pathmemo answers two questions: **where did the space go** — including what a filesystem walk cannot see — and **what can be freed safely**, with an honest estimate of how many bytes come back.
 
-1. **Куда ушло место?** — включая то, что не видно обходом файловой системы.
-2. **Что и как безопасно освободить?** — с честной оценкой, сколько байт вернётся.
+### 1.1. Principles
 
-### 1.1. Принципы
-
-| № | Принцип | Следствие |
+| № | Principle | Consequence |
 |---|---|---|
-| P1 | **Честные цифры.** Сумма скана должна сходиться с занятым местом тома, а расхождение — объясняться. | Учитываем allocated size, hardlinks, sparse, кластеры. Показываем «unaccounted» дельту с причинами. |
-| P2 | **Сканируем всё, защищаем выборочно.** | Исключение из учёта ≠ защита от удаления. Это два независимых списка. Список исключений по умолчанию почти пуст. |
-| P3 | **Освобождение места измеряется фактически.** | До/после каждой операции читаем свободное место тома и показываем реальную дельту. |
-| P4 | **Правильный способ очистки важнее удаления файлов.** | Для кэшей и системных хранилищ выдаём команду штатного механизма (`DISM`, `git gc`, `docker prune`), а не путь на `rm`. |
-| P5 | **Ничего не удаляется без явного действия пользователя.** | Нет автоочистки, нет «оптимизации в один клик». |
-| P6 | **Удаление проверяемо и откатываемо там, где это возможно.** | Карантин + журнал + dry-run. Корзина — только когда она уместна. |
-| P7 | **Не навредить диску, который чистим.** | Свои данные ограничены по размеру и не растут бесконечно. Инструмент никогда не занимает больше 500 МБ. |
-| P8 | **Скрипт-дружелюбность на равных с интерактивом.** | Каждое действие доступно из CLI, со стабильным JSON и осмысленными exit-кодами. |
-| P9 | **Работает в любом терминале.** | Никаких биндингов, которые перехватывает терминал. Минимум 80×24. |
-| P10 | **Недоверенные данные — это данные.** Имена файлов, содержимое конфига, пути — вход, а не команды. | Санитизация при отрисовке, никакого исполнения из конфига, отказ от исполнения найденных файлов по умолчанию. |
+| P1 | **Honest numbers.** The scan total must reconcile with the volume's used space, and any gap must be explained. | Allocated size, hard links, sparse files and clusters all count; the "unaccounted" delta is shown with its causes. |
+| P2 | **Scan everything, protect selectively.** | Excluded from accounting ≠ protected from deletion. Two independent lists; the default exclusion list is nearly empty. |
+| P3 | **Freed space is measured, not assumed.** | Free space is read before and after every operation, and the real delta shown. |
+| P4 | **The right way to clean beats deleting files.** | For caches and system stores, print the vendor's own command (`DISM`, `git gc`, `docker prune`) rather than hand a path to `rm`. |
+| P5 | **Nothing is deleted without an explicit user action.** | No auto-clean, no one-click "optimisation". |
+| P6 | **Deletion is auditable and reversible where possible.** | Quarantine, journal, dry-run. The Recycle Bin only where it actually helps. |
+| P7 | **Do not harm the disk being cleaned.** | The tool's own data is bounded and never exceeds 500 MB. |
+| P8 | **Scriptable on equal terms with interactive.** | Every action is reachable from the CLI, with stable JSON and meaningful exit codes. |
+| P9 | **Works in any terminal.** | No bindings a terminal intercepts. Minimum 80×24. |
+| P10 | **Untrusted data is data.** | Names, config and paths are input, never commands: sanitised on render, nothing executed from config, found files not executed by default. |
 
-### 1.2. Чем отличается от WizTree / TreeSize / ncdu
+### 1.2. How it differs from WizTree / TreeSize / ncdu
 
-- **История и diff.** «Что выросло с прошлой недели на 18 ГБ» — автоматически, по расписанию.
-- **Space Audit.** VSS, WinSxS, WSL/Docker vhdx, Windows Update cache, hiberfil, корзина — то, что обход ФС физически не видит.
-- **Знание экосистем разработки.** npm / pnpm / nuget / gradle / maven / pip / cargo / go / Unity / Unreal / Docker / WSL — с правильной командой очистки для каждого.
-- **Один exe, который одинаково хорош в скрипте и в интерактиве.**
-
----
-
-## 2. Не-цели
-
-Явно **вне** области:
-
-- GUI (WPF/WinUI), веб-приложение как основной интерфейс. *(Локальный treemap-просмотрщик на `localhost` — опциональная фича Phase 3, не замена TUI.)*
-- Автоматическое удаление без подтверждения, «ускорение системы», чистка реестра, любые «оптимизаторы».
-- Управление настройками безопасности (Defender exclusions, UAC, политики). Мы **предлагаем** команду, пользователь выполняет сам.
-- Сервер, многопользовательский режим, облачная синхронизация истории.
-- Perceptual hash для медиа, поиск похожих (не идентичных) файлов.
-- Сетевые и съёмные диски как основной сценарий. Поддерживаются в degraded-режиме, не оптимизируются.
-- Linux / macOS. Абстракции для этого **не** закладываются заранее (см. §17.1).
+- **History and diff** — "what grew by 18 GB since last week", automatically, on a schedule.
+- **Space Audit** — VSS, WinSxS, WSL/Docker vhdx, Windows Update cache, hiberfil, Recycle Bin: what a filesystem walk physically cannot see.
+- **Knows developer ecosystems** — npm, pnpm, nuget, gradle, maven, pip, cargo, go, Unity, Unreal, Docker, WSL, each with its correct cleanup command.
+- **One exe** equally good in a script and in a terminal.
 
 ---
 
-## 2.1. Режимы запуска
+## 2. Non-goals
 
-| Условие | Поведение |
+Explicitly out of scope: a GUI or web app as the primary interface *(a local treemap viewer is an optional Phase 3 extra)*; deletion without confirmation, "system speed-up", registry cleaning, anything of the optimiser genre; managing security settings (Defender exclusions, UAC, policy) — the tool *suggests* a command, the user runs it; a server, multi-user mode or cloud sync; perceptual hashing and similar-file search; network and removable drives as a primary scenario (supported degraded, not optimised); Linux and macOS — abstractions for them are deliberately **not** built in advance (§17.1).
+
+## 2.1. Launch modes
+
+| Condition | Behaviour |
 |---|---|
-| Двойной клик из Проводника (консоль создана под нас) | TUI, окно держится открытым |
-| `--interactive` / `-i` | TUI принудительно, из любого терминала |
-| Без аргументов из терминала | справка |
-| Есть аргументы | соответствующая команда, не-интерактивно |
-| stdout перенаправлен, аргументов нет | `status` — сводка текстом |
-| stdout перенаправлен | всегда не-интерактивно, вывод UTF-8 |
-| Терминал не умеет ANSI | построчное меню вместо TUI (см. ниже) |
+| Double-clicked from Explorer (the console was created for us) | TUI, window stays open |
+| `--interactive` / `-i` | TUI forced, from any terminal |
+| No arguments, from a terminal | help |
+| Arguments present | that command, non-interactive |
+| stdout redirected, no arguments | `status` — a text summary |
+| stdout redirected | always non-interactive, UTF-8 output |
+| Terminal cannot do ANSI | line-based menu instead of the TUI |
 
-Запуск из Проводника отличается от запуска из оболочки через `GetConsoleProcessList`: ровно один процесс, подключённый к консоли, означает, что окно создано для нас и исчезнет вместе с нами. Без этой проверки двойной клик по консольному приложению даёт вспышку окна на долю секунды.
+Explorer launches are told apart from shell launches through `GetConsoleProcessList`: exactly one process attached to the console means the window was created for us and dies with us. Without that check, double-clicking gives a window that flashes for a fraction of a second.
 
-**Что делается для двойного клика (P5).** У окна, созданного Проводником, нет никого, от кого унаследовать разумные настройки, поэтому их выставляем сами: заголовок (`pathmemo <версия>` вместо полного пути к exe), размер (до 110×32, только когда окно наше — чужое окно вместе с его скроллбэком не трогаем), **выключенный quick-edit** и набор глифов под шрифт консоли. У exe есть иконка (§19.1). Любая фатальная ошибка при собственном окне ждёт Enter, а не гасит окно вместе с текстом ошибки.
+**What double-clicking gets (P5).** A window created by Explorer has nobody to inherit sensible settings from, so we set them: the title (`pathmemo <version>` rather than the full exe path), the size (up to 110×32, and only when the window is ours), **quick-edit off**, and a glyph set matched to the console font. The exe carries an icon (§19.1). A fatal error in our own window waits for Enter instead of taking the message down with it.
 
-Quick-edit — единственный из этих пунктов, который не косметика: с ним клик мышью внутри окна начинает выделение, а следующая запись в консоль **блокируется до снятия выделения**. Экран замирает, и пользователь не понимает почему. Режим снимается на время работы экранов и возвращается на выходе — оболочке, которая нас запустила, настройка остаётся её.
+Quick-edit is the one item that is not cosmetic: with it on, a click inside the window starts a selection and **the next console write blocks until the selection is cleared**. The screen freezes and the user has no idea why. The mode is cleared while the screens are up and restored on exit.
 
-*С P5* интерактивная сессия — это настоящие экраны (§14): `TuiHost` включает VT-обработку, уходит в альтернативный буфер и рисует кадры. Если включить VT не удалось или поток перенаправлен, запускается прежняя построчная сессия — не как формальность: в хосте без VT кадр вывелся бы escape-последовательностями текстом, что хуже, чем отсутствие TUI.
+*From P5* an interactive session is the real screens (§14): `TuiHost` enables VT processing, switches to the alternate buffer and draws frames. If VT cannot be enabled or the stream is redirected, the older line-based session runs instead — in a host without VT a frame would appear as literal escape sequences, which is worse than no TUI.
 
-Построчное меню (fallback): `[A]` audit, `[B]` browse, `[S]` scan C:, `[V]` scan all volumes, `[L]` largest files, `[C]` compare the last two scans (показывается, когда снимков хотя бы два), `[H]` scan history, `[D]` diagnostics, `[E]` restart as administrator (показывается только без прав), `[Q]` quit. Пункт `[E]` перезапускает тот же exe через `ShellExecute` с глаголом `runas` и аргументом `--interactive`: манифест остаётся `asInvoker`, права запрашиваются только когда пользователь их попросил — ради проб VSS и DISM. Повышение прав из TUI отдельной клавишей не вынесено: его предлагает сам скан, а скан из TUI идёт в обычной консоли (§14.7).
+Line-based fallback menu: `[A]` audit, `[B]` browse, `[S]` scan C:, `[V]` scan all volumes, `[L]` largest files, `[C]` compare the last two scans, `[H]` history, `[D]` diagnostics, `[E]` restart as administrator (only when unelevated), `[Q]` quit. `[E]` relaunches the same exe through `ShellExecute` with the `runas` verb: the manifest stays `asInvoker`, so rights are requested only when asked for. Elevation has no dedicated TUI key — the scan itself offers it (§14.7).
 
 ---
 
-## 3. Модель дискового места
+## 3. The disk space model
 
-Фундаментальный раздел: без него цифры не сойдутся, и весь инструмент бесполезен.
+Without this section the numbers do not add up and the tool is useless.
 
-### 3.1. Четыре разных «размера»
+### 3.1. Four different "sizes"
 
-| Термин | Что это | Откуда берём |
+| Term | What it is | Source |
 |---|---|---|
-| **Logical size** | Размер потока данных (то, что показывает `FileInfo.Length`). | MFT `DataSize` / `FILE_STANDARD_INFO.EndOfFile` |
-| **Allocated size** | Сколько байт реально занято на томе: округление до кластера, NTFS-сжатие, sparse-дырки. | MFT `AllocatedSize` / `GetCompressedFileSize` |
-| **Unique allocated size** | Allocated с учётом hardlink-дедупликации: каждый физический файл посчитан один раз. | Дедупликация по `(VolumeSerial, FileReferenceNumber)` |
-| **Reclaimable size** | Сколько освободится при удалении **этого конкретного набора** путей. | `Unique allocated`, но только для файлов, у которых **все** hardlink-ссылки входят в набор |
+| **Logical size** | The data stream's length (what `FileInfo.Length` shows). | MFT `DataSize` / `FILE_STANDARD_INFO.EndOfFile` |
+| **Allocated size** | Bytes actually occupied: cluster rounding, NTFS compression, sparse holes. | MFT `AllocatedSize` / `GetCompressedFileSize` |
+| **Unique allocated** | Allocated with hard-link dedup: each physical file counted once. | Dedup by `(VolumeSerial, FileReferenceNumber)` |
+| **Reclaimable** | What deleting **this particular set** of paths frees. | Unique allocated, but only for files whose links are **all** inside the set |
 
-**Правила отображения:**
-- Все размеры в дашборде, дереве и отчётах — **unique allocated** по умолчанию. Это единственная величина, которая складывается в занятое место тома.
-- В деталях файла показываем и logical, и allocated, и число hardlink-ссылок.
-- В диалоге удаления показываем **reclaimable**, а не сумму размеров. Если они различаются — объясняем почему («12 GB selected, 3.1 GB reclaimable: 8.9 GB is shared via hard links with files outside the selection»).
-- Переключение режима отображения — клавиша `m` в TUI, `--size logical|allocated|unique` в CLI.
+Every size in the dashboard, tree and reports is **unique allocated** by default — the only quantity that adds up to the volume's used space. File details show logical, allocated and the link count. The delete dialog shows **reclaimable**, not the sum of sizes, and explains a difference ("12 GB selected, 3.1 GB reclaimable: 8.9 GB is shared via hard links with files outside the selection"). Mode switch: `m` in the TUI, `--size logical|allocated|unique` in the CLI.
 
-### 3.2. Hardlinks
+### 3.2. Hard links
 
-`C:\Windows\WinSxS` почти целиком состоит из жёстких ссылок на файлы в `System32`. Без дедупликации `C:\Windows` будет показан в 2–3 раза больше реального.
+`C:\Windows\WinSxS` consists almost entirely of hard links to files in `System32`. Without dedup, `C:\Windows` shows 2–3x its real size.
 
-**Алгоритм:**
-1. Каждый файл получает ключ `(VolumeSerialNumber, FileReferenceNumber)` — 128 бит на NTFS.
-2. Первое вхождение в порядке обхода (детерминированный DFS) становится **владельцем** байтов, остальные — **ссылками** (`NodeFlags.HardlinkAlias`).
-3. `Unique allocated` агрегируется только по владельцам.
-4. Число ссылок (`LinkCount` из MFT) хранится в узле — позволяет мгновенно ответить «освободит ли удаление место».
-5. В UI ссылки помечены, и их размер показан серым: `1.2 GB (link)`.
+Every file gets the key `(VolumeSerialNumber, FileReferenceNumber)`. The first occurrence in traversal order **owns** the bytes, the rest are aliases (`NodeFlags.HardlinkAlias`), and unique allocated aggregates over owners only. The link count is stored per node, which answers "will deleting this free anything" instantly; aliases are marked in the UI and their size greyed: `1.2 GB (link)`.
 
-**Degraded-режим (fallback-сканер):** получить `FileReferenceNumber` без открытия handle нельзя. Компромисс: открываем handle и читаем `FILE_ID_INFO` только для файлов **больше 1 МБ** (их единицы процентов от общего числа, а hardlink-дубли меньшего размера дают пренебрежимую ошибку). Флаг снимка `SnapshotFlags.PartialHardlinkResolution` сигнализирует UI показать предупреждение.
+**Degraded mode (walk scanner):** `FileReferenceNumber` needs an open handle, so it is read only for files **over 1 MB** — a few percent of the count, and hard-linked duplicates below that size contribute negligible error. `SnapshotFlags.PartialHardlinkResolution` tells the UI to warn.
 
-*Реализовано (P3):* handle открывается с `FILE_READ_ATTRIBUTES` + `FILE_FLAG_OPEN_REPARSE_POINT`, сначала читается `FILE_STANDARD_INFO.NumberOfLinks`, и только при `> 1` — `FILE_ID_INFO`. Идентификаторы не хранятся в `RawEntry` (это добавило бы 16 байт на каждый из 1.5 млн элементов), а лежат в боковом списке каталога. На C: файлов ≥ 1 МБ 16 тыс., цена — около 3 с из 44. Владелец — первое вхождение в **BFS-порядке** сборки снимка: у файла с именами `System32\foo.dll` и `WinSxS\amd64_…\foo.dll` владельцем становится более короткий путь, что и ожидает пользователь. То же правило действует в MFT-сканере.
+*Implemented (P3):* the handle is opened with `FILE_READ_ATTRIBUTES` + `FILE_FLAG_OPEN_REPARSE_POINT`; `FILE_STANDARD_INFO.NumberOfLinks` is read first and `FILE_ID_INFO` only when it is `> 1`. The ids live in a side list per directory rather than in `RawEntry` (16 bytes × 1.5M entries). C: has 16k files ≥ 1 MB, costing about 3 s out of 44. The owner is the first occurrence in **BFS order**, so a file present as `System32\foo.dll` and `WinSxS\amd64_…\foo.dll` is owned by the shorter path. The MFT scanner follows the same rule.
 
-### 3.3. Sparse и NTFS-compressed
+### 3.3. Sparse and NTFS-compressed
 
-- Sparse: `AllocatedSize` < `LogicalSize`. Типично для `ext4.vhdx` (WSL), баз данных, образов. **Критично**: WSL-диск на 80 ГБ logical может занимать 12 ГБ allocated, а может и все 80.
-- NTFS-compressed: то же, но по другой причине. Обрабатывается одинаково — используем `AllocatedSize`.
-- В UI: если `allocated / logical < 0.9`, рядом с размером бейдж `sparse` или `compressed`.
+Sparse files have `AllocatedSize` < `LogicalSize` — typical for `ext4.vhdx` (WSL), databases and images. **This matters**: an 80 GB logical WSL disk may occupy 12 GB, or all 80. NTFS compression is the same effect for a different reason, handled identically through `AllocatedSize`. When `allocated / logical < 0.9` the UI adds a `sparse` or `compressed` badge.
 
-### 3.4. Alternate Data Streams
+### 3.4. Alternate data streams
 
-Учитываем суммарно: при MFT-скане все `$DATA`-атрибуты файла суммируются автоматически. В fallback-режиме ADS не учитываются (ошибка < 0.1% на типичной системе, кроме `Zone.Identifier` по 100 байт на файл) — это документированное ограничение.
+An MFT scan sums every `$DATA` attribute of a file automatically. The walk scanner does not see ADS — a documented limitation, under 0.1% error on a typical system.
 
-### 3.5. Сверка с томом (reconciliation)
+### 3.5. Volume reconciliation
 
-После каждого скана:
+After every scan:
 
 ```
 Volume C:  total 476.1 GB   free 21.3 GB   used 454.8 GB
@@ -183,49 +176,38 @@ Volume C:  total 476.1 GB   free 21.3 GB   used 454.8 GB
   Unaccounted                              27.1 GB   [?] explain
 ```
 
-Кнопка `[?] explain` открывает список возможных причин с командами проверки. Это превращает «цифры не сходятся» из бага в фичу.
-
-Источники:
-- `GetDiskFreeSpaceExW` — total / free.
-- `FSCTL_GET_NTFS_VOLUME_DATA` — `MftValidDataLength`, размеры метаданных, размер кластера.
-- `SHQueryRecycleBinW` — корзина по тому.
-- WMI `Win32_ShadowStorage` — теневые копии.
+`[?] explain` lists the possible causes with commands to check each, which turns "the numbers don't add up" from a bug into a feature. Sources: `GetDiskFreeSpaceExW`, `FSCTL_GET_NTFS_VOLUME_DATA`, `SHQueryRecycleBinW`, WMI `Win32_ShadowStorage`.
 
 ---
+## 4. Scanning
 
-## 4. Сканирование
+### 4.1. Two paths, one result
 
-### 4.1. Два пути, один результат
-
-| | **MFT scanner** (основной) | **Walk scanner** (fallback) |
+| | **MFT scanner** (primary) | **Walk scanner** (fallback) |
 |---|---|---|
-| Механизм | чтение `\\.\C:` + `FSCTL_GET_NTFS_VOLUME_DATA` + прямой разбор записей `$MFT` (§4.3.1; `FSCTL_ENUM_USN_DATA` отвергнут — одно имя на файл) | `FileSystemEnumerator<T>` |
-| Требует админа | **да** | нет |
-| ФС | только NTFS | любая |
-| 1 млн файлов | **3–8 с** | 45 с – 5 мин |
-| Allocated size | да, бесплатно | `GetCompressedFileSize` (+1 syscall) |
-| FileReferenceNumber / LinkCount | да, бесплатно | только для файлов > 1 МБ |
-| ADS | да | нет |
-| Видит недоступные по ACL пути | **да** | нет |
+| Mechanism | `\\.\C:` + `FSCTL_GET_NTFS_VOLUME_DATA` + direct `$MFT` parsing (§4.3.1) | `FileSystemEnumerator<T>` |
+| Needs admin | **yes** | no |
+| Filesystem | NTFS only | any |
+| 1M files | **3–8 s** | 45 s – 5 min |
+| Allocated size | yes, free | `GetCompressedFileSize` (+1 syscall) |
+| FileReferenceNumber / LinkCount | yes, free | files > 1 MB only |
+| ADS | yes | no |
+| Sees ACL-denied paths | **yes** | no |
 
-**MFT-путь — основной.** Он даёт на порядок лучшие цифры, на два порядка большую скорость и видит то, куда обычному обходу нет доступа. Это не оптимизация «на потом», это ядро продукта.
+The MFT path is the primary one: an order of magnitude better numbers, two orders of magnitude more speed, and it sees what an ordinary walk is denied. Core of the product, not a later optimisation.
 
-### 4.2. Выбор пути
+### 4.2. Choosing a path
 
 ```
-для каждого целевого тома:
-    если ФС == NTFS и процесс elevated:
-        MFT scanner
-    иначе если ФС == NTFS и не elevated:
-        предложить релонч с правами администратора;
-        при отказе — Walk scanner с флагом Degraded
-    иначе:
-        Walk scanner
+for each target volume:
+    NTFS and elevated        -> MFT scanner
+    NTFS and not elevated    -> offer to relaunch elevated;
+                                if declined, Walk scanner with the Degraded flag
+    otherwise                -> Walk scanner
 ```
 
-Релонч: `ShellExecuteEx` с `lpVerb = "runas"`, тот же командной строкой + `--elevated-relaunch`. Для CLI — только если есть TTY; в скриптовом режиме печатаем предупреждение и работаем в degraded.
+Relaunch is `ShellExecuteEx` with `lpVerb = "runas"` and the same command line plus `--elevated-relaunch`; from the CLI only when there is a TTY, and in script mode a warning is printed and the degraded path used.
 
-**Сообщение пользователю (English, как в приложении):**
 ```
 Running without administrator rights.
   · Fast MFT scan unavailable (falling back to directory walk: ~40x slower)
@@ -237,124 +219,82 @@ Running without administrator rights.
 
 ### 4.3. MFT scanner
 
-1. Открыть том: `CreateFileW(@"\\.\C:", GENERIC_READ, FILE_SHARE_READ|WRITE, OPEN_EXISTING, 0)`.
-2. `DeviceIoControl(FSCTL_GET_NTFS_VOLUME_DATA)` → размер кластера, размер `$MFT`, число записей.
-3. `DeviceIoControl(FSCTL_ENUM_USN_DATA)` в цикле, буфер 1 МБ, версия записи `USN_RECORD_V3` (128-битные FileId) с fallback на V2.
-4. Из каждой записи: `FileReferenceNumber`, `ParentFileReferenceNumber`, `FileName`, `FileAttributes`.
-5. `ENUM_USN_DATA` **не возвращает размеры**. Размеры берём одним из двух способов:
-   - **(предпочтительно)** парсинг `$MFT` напрямую: читаем `$MFT` через `FSCTL_GET_RETRIEVAL_POINTERS` + raw-чтение тома, разбираем атрибуты `$STANDARD_INFORMATION` и `$DATA` (resident/non-resident, `AllocatedSize`, `RealSize`, `TotalAllocated` для sparse). Это то, что делает WizTree. Даёт всё за один последовательный проход.
-   - **(упрощённо, для первой итерации)** `GetFileInformationByHandleEx(FileIdInfo)` не нужен, но размер — нужен; открывать 1 млн handle'ов недопустимо. Поэтому: **первая итерация сразу делает парсинг `$MFT`.** Компромисс «USN для дерева + handle для размеров» отвергнут как нежизнеспособный.
-6. Построение путей: `parentId → id` образует граф; корень тома имеет известный `FileReferenceNumber` (5). Один проход снизу вверх даёт полные пути без строковой конкатенации.
-7. Записи с флагом «удалён» и записи-расширения (`$ATTRIBUTE_LIST`) отбрасываются.
+Open the volume, read `FSCTL_GET_NTFS_VOLUME_DATA` for cluster size, `$MFT` size and record count, then parse `$MFT` records directly: `$STANDARD_INFORMATION` and `$DATA` (resident and non-resident, `AllocatedSize`, `RealSize`, run totals for sparse). One sequential pass yields names, parents, sizes, attributes, times and link counts. `parentId → id` forms a graph rooted at record 5; one bottom-up pass produces full paths without string concatenation. Deleted and extension records are dropped. Any parse failure — a non-standard volume, a locked BitLocker volume, corruption — falls back to the walk scanner, with the reason in `scan_errors`.
 
-**Обработка ошибок:** любая ошибка парсинга `$MFT` (нестандартный том, шифрование BitLocker в состоянии locked, повреждение) → откат на Walk scanner с записью причины в `scan_errors`.
+#### 4.3.1. Implementation notes (P3)
 
-#### 4.3.1. Как это реализовано (P3)
-
-- **`FSCTL_ENUM_USN_DATA` не используется вовсе.** Он даёт по одному имени на файл, а hardlink-дедупликации нужны все `$FILE_NAME`. Полный разбор `$MFT` даёт имена, родителей, размеры, атрибуты, время и число ссылок за один последовательный проход — `MftParser` (чистая функция над байтами, покрыта синтетическими записями) и `MftScanner`.
-- **Где лежит `$MFT`:** запись 0 читается по `MftStartLcn` из `NTFS_VOLUME_DATA_BUFFER`, её `$DATA` data runs дают экстенты; при сильной фрагментации продолжения runs лежат в extension-записях, на которые указывает `$ATTRIBUTE_LIST` записи 0 — они тоже читаются. `FSCTL_GET_RETRIEVAL_POINTERS` не нужен.
-- **Чтение:** `\\.\C:` открывается с `GENERIC_READ` (это единственное место, требующее elevated), чтение позиционное через `ReadFile` с `OVERLAPPED.Offset`, кусками по 8 МБ, с двойной буферизацией: следующий кусок читается, пока разбирается текущий. Всё чтение — одно-два ГБ последовательного I/O, ни одного открытого файла.
-- **Fixup:** update sequence array применяется к каждой записи; несовпадение — запись пропускается и считается в `scan_errors` («N записей не прошли проверку целостности»). Нулевые (никогда не записанные) слоты — норма.
-- **Extension-записи** (у файла с десятками hardlink-ссылок `$FILE_NAME` не помещаются в одну запись, у фрагментированного — `$DATA`) относятся к базовой записи по `BaseRecord`, с проверкой sequence number: устаревшая ссылка на переиспользованный слот отбрасывается.
-- **Размеры:** logical — `RealSize` из заголовка первой части `$DATA` (`StartVcn == 0`); **allocated — сумма реальных data runs всех частей, дыры не считаются.** Это единственный способ, который одинаково верен для обычных, sparse, NTFS-compressed потоков и для `$BadClus:$Bad` — потока размером с весь том без флага sparse (в первом прогоне он дал «−220 ГБ unaccounted»). Все `$DATA`-потоки суммируются (ADS учтены), `$INDEX_ALLOCATION` каталога — его собственные кластеры. Resident-данные стоят 0 кластеров: они внутри записи `$MFT`, которую считает проба `ntfs.metadata`.
-- **Атрибуты:** в сыром `$STANDARD_INFORMATION` бит `0x40000` означает «есть extended attributes» (все файлы из WIM-образа и сам `C:\Windows`), а Win32 использует то же значение для `RECALL_ON_OPEN`. Без маски половина Windows показывалась как `[cloud]`. Правило: recall-биты значимы только у reparse point, `OFFLINE` — всегда.
-- **Дерево:** ссылки индексируются по родителю counting sort'ом, обход BFS от записи 5 (или от записи каталога, если сканируется подкаталог). Первое вхождение записи — владелец, последующие — `HardlinkAlias`; каталог, встреченный дважды (повреждение), второй раз не обходится. Записи, чей родитель удалён или переиспользован, — сироты: считаются и сообщаются, в дерево не подшиваются.
-- **Что попадает в дерево:** всё, что есть в `$MFT`, включая метафайлы `$MFT`, `$LogFile`, `$Bitmap`, `$Extend\$UsnJrnl` — это реальные байты тома, и WizTree показывает их так же. Поэтому в MFT-режиме сверка с томом не добавляет метаданные второй раз.
-- **Смешанные наборы томов:** NTFS с правами — MFT, остальные (exFAT, FAT32, отказ MFT) — walk одним вызовом с work-stealing; деревья склеиваются `TreeAssembly.Concat` со сдвигом индексов. Причина отката записана в `scan_errors`.
-- **Память:** массивы по числу записей (~30 байт на запись) + список ссылок (20 байт) + итоговый `NodeStore`; 1.8 млн записей C: укладываются в бюджет 250 МБ.
+- **`FSCTL_ENUM_USN_DATA` is not used at all.** It gives one name per file, while hard-link dedup needs every `$FILE_NAME`. Full `$MFT` parsing gives everything in one pass — `MftParser` (a pure function over bytes, covered by synthetic records) and `MftScanner`.
+- **Locating `$MFT`:** record 0 is read at `MftStartLcn`, and its `$DATA` runs give the extents. Under heavy fragmentation the continuation runs live in extension records pointed at by record 0's `$ATTRIBUTE_LIST`, which are read too. `FSCTL_GET_RETRIEVAL_POINTERS` is not needed.
+- **Reading:** `\\.\C:` is opened with `GENERIC_READ` (the only thing requiring elevation); reads are positional via `ReadFile` with `OVERLAPPED.Offset`, in 8 MB chunks, double-buffered so the next chunk arrives while the current one is parsed. One or two GB of sequential I/O, not a single file opened.
+- **Fixup:** the update sequence array is applied to every record; a mismatch skips it and counts into `scan_errors`. Never-written slots are normal.
+- **Extension records** attach to their base record by `BaseRecord`, with a sequence-number check so a stale reference to a reused slot is dropped.
+- **Sizes:** logical is `RealSize` from the first `$DATA` part; **allocated is the sum of the real data runs of every part, holes excluded.** That is the only rule equally correct for ordinary, sparse and compressed streams and for `$BadClus:$Bad` — a stream the size of the whole volume with no sparse flag, which produced "−220 GB unaccounted" on the first run. All `$DATA` streams are summed, so ADS are counted. Resident data costs 0 clusters: it lives inside the `$MFT` record, which the `ntfs.metadata` probe already counts.
+- **Attributes:** in raw `$STANDARD_INFORMATION`, bit `0x40000` means "has extended attributes" (every file from a WIM image, and `C:\Windows` itself), while Win32 uses the same value for `RECALL_ON_OPEN`. Unmasked, half of Windows showed up as `[cloud]`. Rule: recall bits count only on a reparse point; `OFFLINE` always counts.
+- **Tree:** links are indexed by parent with a counting sort, then BFS from record 5. The first occurrence owns, later ones are `HardlinkAlias`; a directory met twice (corruption) is not walked again. Records whose parent is deleted or reused are orphans: counted and reported, not attached.
+- **What lands in the tree:** everything in `$MFT`, including `$MFT`, `$LogFile`, `$Bitmap` and `$Extend\$UsnJrnl` — real volume bytes, shown the same way by WizTree. Reconciliation therefore does not add metadata twice in MFT mode.
+- **Mixed volume sets:** NTFS with rights goes through the MFT, the rest (exFAT, FAT32, an MFT refusal) through one work-stealing walk; trees are spliced by `TreeAssembly.Concat` with index offsets.
+- **Memory:** arrays sized by record count (~30 bytes each) plus a link list (20 bytes) plus the final `NodeStore`; C:'s 1.8M records fit the 250 MB budget.
 
 ### 4.4. Walk scanner
 
+A custom `FileSystemEnumerator<RawEntry>` rather than `Directory.EnumerateFileSystemEntries`, which allocates a full path per entry and needs a separate stat for the size:
+
 ```csharp
-// Ключевое: НЕ Directory.EnumerateFileSystemEntries (аллоцирует полный путь на запись
-// и требует отдельного stat для размера), а свой FileSystemEnumerator.
-sealed class FastEnumerator : FileSystemEnumerator<RawEntry>
+protected override RawEntry TransformEntry(ref FileSystemEntry entry) => new()
 {
-    protected override RawEntry TransformEntry(ref FileSystemEntry entry) => new()
-    {
-        Name       = entry.FileName,          // ReadOnlySpan<char>, копируем в общий блоб
-        Logical    = entry.Length,            // из FILE_FULL_DIR_INFO, без syscall
-        Attributes = entry.Attributes,        // без syscall
-        MTime      = entry.LastWriteTimeUtc,  // без syscall
-        IsDir      = entry.IsDirectory,
-    };
+    Name       = entry.FileName,          // ReadOnlySpan<char>, copied into a shared blob
+    Logical    = entry.Length,            // from FILE_FULL_DIR_INFO, no syscall
+    Attributes = entry.Attributes,
+    MTime      = entry.LastWriteTimeUtc,
+    IsDir      = entry.IsDirectory,
+};
 
-    protected override bool ShouldRecurseIntoEntry(ref FileSystemEntry entry)
-        => entry.IsDirectory
-        && (entry.Attributes & FileAttributes.ReparsePoint) == 0;   // точку учитываем, внутрь не идём
-}
+protected override bool ShouldRecurseIntoEntry(ref FileSystemEntry entry)
+    => entry.IsDirectory
+    && (entry.Attributes & FileAttributes.ReparsePoint) == 0;   // count the point, never enter it
 ```
 
-`EnumerationOptions`:
-```csharp
-new EnumerationOptions {
-    RecurseSubdirectories = false,          // рекурсию ведём сами, work-stealing очередью
-    IgnoreInaccessible    = false,          // ошибки нужны в отчёт, не в тишину
-    AttributesToSkip      = 0,              // НИЧЕГО не скрываем: ни Hidden, ни System
-    BufferSize            = 64 * 1024,      // FIND_FIRST_EX_LARGE_FETCH
-    MatchType             = MatchType.Win32,
-}
-```
+`EnumerationOptions`: `RecurseSubdirectories = false` (recursion is ours), `IgnoreInaccessible = false` (errors belong in the report, not in silence), `AttributesToSkip = 0` (**nothing** hidden — not Hidden, not System), `BufferSize = 64 * 1024`, `MatchType.Win32`.
 
-**Параллелизм — work-stealing, не партиционирование по уровню.**
-`ConcurrentQueue<DirTask>`, N воркеров, каждый берёт каталог → перечисляет → подкаталоги обратно в очередь. Партиционирование «по папкам 2-го уровня» отвергнуто: `C:\Windows\WinSxS` — это ~40% всех файлов диска, один воркер молотил бы его в одиночку.
+**Parallelism is work-stealing, not partitioning by level.** A `ConcurrentQueue<DirTask>`, N workers, each taking a directory and pushing its subdirectories back. Partitioning "by second-level folder" was rejected: `C:\Windows\WinSxS` is ~40% of all files on the disk, and one worker would grind through it alone.
 
-**N по типу носителя:**
-```
-IOCTL_STORAGE_QUERY_PROPERTY → StorageDeviceSeekPenaltyProperty
-  IncursSeekPenalty == true  (HDD)  → N = 2
-  IncursSeekPenalty == false (SSD)  → N = min(8, CPU)
-  неизвестно / сетевой               → N = 4
-```
-`MaxDegreeOfParallelism = CPU count` на HDD делает скан **в 2–3 раза медленнее** однопоточного. Дефолт `0` в конфиге означает «автоопределение», а не «по числу ядер».
+N follows the medium, via `IOCTL_STORAGE_QUERY_PROPERTY` → `StorageDeviceSeekPenaltyProperty`: HDD → 2, SSD → `min(8, CPU)`, unknown or network → 4. `MaxDegreeOfParallelism = CPU count` makes an HDD scan **2–3x slower** than single-threaded, so the config default of `0` means auto-detect, not "one per core".
 
-### 4.5. Incremental rescan через USN Journal
+### 4.5. Incremental rescan through the USN journal
 
-Второй и последующие сканы того же тома:
+The snapshot stores `(VolumeSerial, UsnJournalId, NextUsn)`. On a later scan, `FSCTL_QUERY_USN_JOURNAL` confirms the journal was not reset; `FSCTL_READ_USN_JOURNAL` from the saved USN lists the changed records; those are re-read and aggregates recomputed up the tree. Otherwise a full scan runs. Result: **0.2–2 s** instead of 5, which is what makes history, diff and hourly scheduled scans practical. If the journal is off, the tool suggests `fsutil usn createjournal m=32000000 a=8000000 C:` for the user to run.
 
-1. В снимке сохранён `(VolumeSerial, UsnJournalId, NextUsn)`.
-2. `FSCTL_QUERY_USN_JOURNAL` → если `UsnJournalId` совпадает и `FirstUsn <= сохранённый NextUsn` — журнал не обнулялся, инкремент возможен.
-3. `FSCTL_READ_USN_JOURNAL` с сохранённого USN → список изменённых `FileReferenceNumber`.
-4. Применяем изменения к предыдущему снимку: для затронутых файлов перечитываем записи MFT, пересчитываем агрегаты вверх по дереву.
-5. Иначе — полный скан.
+### 4.6. What is skipped and what is counted
 
-Результат: повторный скан **0.2–2 с** вместо 5. Это делает историю и diff практичными и позволяет запускать скан по расписанию хоть каждый час.
-
-Если журнал выключен — предложить включить: `fsutil usn createjournal m=32000000 a=8000000 C:` (пользователь выполняет сам, §P10).
-
-### 4.6. Что пропускаем и что учитываем
-
-| Сущность | Рекурсия | Учёт размера | Почему |
+| Entity | Recurse | Size counted | Why |
 |---|---|---|---|
-| Reparse point (junction, symlink, mount point) | **нет** | сама точка = 0 байт, помечена `Reparse` | Предотвращает бесконечную рекурсию и двойной учёт. Цель показана в деталях. |
-| Cloud placeholder (`RECALL_ON_OPEN`, `RECALL_ON_DATA_ACCESS`, `OFFLINE`) | — | **allocated (обычно ~0)**, помечен `CloudOnly` | Cloud-only файл не занимает места. Это важно показать: «50 GB in cloud, 0 GB local». |
-| Hidden / System файлы | да | **да** | Пропуск скрывает `hiberfil.sys`, `pagefile.sys`, `AppData` — то есть самое важное. |
-| `$Recycle.Bin` | да | да, отдельной категорией | Это освобождаемое место. |
-| `System Volume Information` | нет доступа даже у админа | учитывается через VSS-пробу | |
-| Собственные данные pathmemo | да | да, помечены `SelfData` | Честность: инструмент показывает и себя. |
-| Точки монтирования другого тома | **нет** | 0 | Иначе диск посчитается дважды. Том сканируется отдельно. |
+| Reparse point (junction, symlink, mount point) | **no** | the point itself = 0 bytes, flagged `Reparse` | Prevents infinite recursion and double counting; the target is shown in details. |
+| Cloud placeholder (`RECALL_ON_*`, `OFFLINE`) | — | **allocated (usually ~0)**, flagged `CloudOnly` | A cloud-only file occupies nothing, and saying so matters: "50 GB in cloud, 0 GB local". |
+| Hidden / System files | yes | **yes** | Skipping them hides `hiberfil.sys`, `pagefile.sys` and `AppData` — the most important things. |
+| `$Recycle.Bin` | yes | yes, as its own category | This is reclaimable space. |
+| `System Volume Information` | no access even as admin | covered by the VSS probe | |
+| pathmemo's own data | yes | yes, flagged `SelfData` | Honesty: the tool shows itself too. |
+| Mount point of another volume | **no** | 0 | Otherwise the disk is counted twice; that volume is scanned separately. |
 
-### 4.7. Прогресс
+### 4.7. Progress
 
-Обновление раз в 250 мс, из потока-рендерера, читающего `volatile`-счётчики (без блокировок на горячем пути).
+Refreshed every 250 ms from a renderer thread reading `volatile` counters, so the hot path takes no locks.
 
 ```
 Scanning C:\  ·  MFT mode
   1,284,391 records   ·   412.8 GB   ·   198k rec/s   ·   6.4 s elapsed
   $MFT: 78%  ████████████████████░░░░░
 ```
-Для Walk-режима — путь текущего каталога (обрезанный по ширине) и файлы/с. **ETA не показываем** в Walk-режиме: общее число файлов заранее неизвестно, а фальшивый процент хуже его отсутствия. В MFT-режиме процент честный (число записей известно из `FSCTL_GET_NTFS_VOLUME_DATA`).
 
-### 4.8. Отмена
+Walk mode shows the current directory and files/s, and **no ETA**: the file count is unknown in advance, and a fake percentage is worse than none. The MFT percentage is honest — the record count is known up front.
 
-- `Ctrl+C` / `Esc`: сигнал `CancellationToken`.
-- Частичный результат **сохраняется** со статусом `cancelled` и флагом `Partial` — он пригоден для просмотра, но не для diff и не для reclaim-рекомендаций.
-- Второй `Ctrl+C` в течение 3 с — немедленный выход без сохранения (защита от зависшего сохранения на сетевом диске).
-- Обработчик `PosixSignalRegistration`/`Console.CancelKeyPress` только выставляет токен; запись делает основной поток с таймаутом 10 с.
+### 4.8. Cancellation
 
-### 4.9. Ошибки
+`Ctrl+C` or `Esc` sets a `CancellationToken`. The partial result **is saved**, with status `cancelled` and the `Partial` flag: fit for browsing, not for diff or reclaim advice. A second `Ctrl+C` within 3 s exits immediately without saving, in case a save hangs on a network drive. The handler only sets the token; the main thread writes, with a 10 s timeout.
 
-Каждая ошибка → запись `ScanError { Path, Kind, Win32Code, Message }`, сгруппированная по `Kind`:
+### 4.9. Errors
+
+Every failure becomes a `ScanError { Path, Kind, Win32Code, Message }`, grouped by kind:
 
 ```
 AccessDenied          104 paths    (~? GB)
@@ -364,37 +304,30 @@ NameInvalid             1 path     (created by WSL: contains ':')
 IoError                 0 paths
 ```
 
-Для `AccessDenied` в MFT-режиме размер **известен** (мы читаем метаданные, минуя ACL) — показываем точную цифру. Это важное преимущество MFT-пути.
+In MFT mode the size behind `AccessDenied` **is known** — metadata is read past the ACL — so the exact figure is shown.
 
 ---
 
-## 5. Формат снимка
+## 5. Snapshot format
 
-### 5.1. Почему не SQLite построчно
+### 5.1. Why not SQLite row by row
 
-Хранить 1 млн файлов строками в SQLite — это 150–250 МБ на скан. С историей это десятки гигабайт: **инструмент для освобождения места сам съест диск** (нарушение P7). Плюс вставка миллиона строк — секунды, а чтение для дерева — снова секунды.
-
-Решение: **бинарный снимок на скан + SQLite только для метаданных и журналов.**
+A million files as SQLite rows is 150–250 MB per scan, and with history that is tens of gigabytes: **the tool for freeing space would eat the disk** (violating P7). Inserting a million rows takes seconds, and reading them back for the tree takes seconds again. The answer: **a binary snapshot per scan, with SQLite for metadata and journals only.**
 
 ```
 %LOCALAPPDATA%\pathmemo\
-├── pathmemo.db              # SQLite (WAL): истории, журнал удалений, правила, кэш хешей
-├── pathmemo.db-wal
-├── config.json              # пользовательская конфигурация
-├── snapshots\
-│   ├── 0000000042.pmsnap    # ~10–25 МБ на 1 млн файлов
-│   └── 0000000043.pmsnap
-├── quarantine\
-│   └── 0000000043\          # см. §9.4
+├── pathmemo.db              # SQLite (WAL): history, deletion journal, rules, hash cache
+├── config.json
+├── snapshots\0000000042.pmsnap    # ~10–25 MB per 1M files
+├── quarantine\0000000043\         # §9.4
 ├── logs\
-│   └── pathmemo-20260917.log
 └── exports\
 ```
 
-### 5.2. Структура `.pmsnap` v1
+### 5.2. `.pmsnap` v1 structure
 
 ```
-HEADER (64 байта, несжатый)
+HEADER (64 bytes, uncompressed)
     magic          u8[8]    "PMSNAP\x01\x00"
     formatVersion  u16      1
     toolVersion    u32      packed semver
@@ -403,124 +336,112 @@ HEADER (64 байта, несжатый)
     volumeCount    u16
     flags          u32      Partial | Degraded | PartialHardlinkResolution | Elevated | Incremental
     sectionCount   u16
-    reserved       u8[...]
 
-SECTION TABLE (sectionCount × 16 байт)
-    kind u32, compression u32 (0=raw,1=deflate), rawLen u64, storedLen u64, offset u64
+SECTION TABLE (sectionCount x 16 bytes)
+    kind u32, compression u32 (0=raw, 1=deflate), rawLen u64, storedLen u64, offset u64
 
-SECTIONS (каждая сжимается независимо)
-    NAMES     : len-prefixed UTF-8 сегменты имён, дедуплицированные (не полные пути)
-    NAME_IDX  : u32[] смещения в NAMES
-    NODES     : Struct-of-Arrays, см. ниже
-    VOLUMES   : на каждый том: letter, label, fs, serial, clusterSize, total, free,
-                mftSize, metadataSize, usnJournalId, nextUsn
+SECTIONS (each compressed independently)
+    NAMES     : length-prefixed UTF-8 name segments, deduplicated (not full paths)
+    NAME_IDX  : u32[] offsets into NAMES
+    NODES     : struct-of-arrays, below
+    VOLUMES   : letter, label, fs, serial, clusterSize, total, free, mftSize,
+                metadataSize, usnJournalId, nextUsn
     ERRORS    : ScanError[]
-    AGGREGATES: предрасчитанные топы (по расширениям, по категориям) — опционально,
-                считаются из NODES за десятки мс, кэш ради мгновенного открытия
+    AGGREGATES: precomputed tops, optional cache
 ```
 
-### 5.3. NODES: Struct-of-Arrays
+### 5.3. NODES: struct-of-arrays
 
-Узлы упорядочены так, что **дети каждого каталога идут непрерывным диапазоном** (порядок эмиссии — BFS). Это даёт O(1) навигацию и линейное чтение при отрисовке.
+Nodes are ordered so that **each directory's children occupy a contiguous range** (emission order is BFS), which gives O(1) navigation and linear reads while drawing.
 
-Сортировка по размеру **не запекается в снимок**: суммы поддеревьев известны только после агрегирующего прохода снизу вверх, поэтому упорядочивание хранимых массивов потребовало бы второго прохода-перестановки, переписывающего каждый дочерний указатель. Ненадёжный обмен ради того, что на отрисовке стоит миллисекунды. Дети сортируются в `TreeQuery.ChildrenBySize` при показе.
+Sort-by-size is deliberately **not** baked in: subtree sums are known only after a bottom-up aggregation pass, so ordering the stored arrays would need a second permuting pass that rewrites every child pointer — a fragile trade for something that costs milliseconds at render time. `TreeQuery.ChildrenBySize` sorts on display.
 
-| Массив | Тип | Байт | Назначение |
+| Array | Type | Bytes | Purpose |
 |---|---|---|---|
-| `parent` | `i32[]` | 4 | индекс родителя, `-1` для корня тома |
-| `nameIdx` | `i32[]` | 4 | индекс в `NAME_IDX` |
-| `firstChild` | `i32[]` | 4 | индекс первого ребёнка, `-1` если нет |
-| `childCount` | `i32[]` | 4 | число прямых детей |
-| `allocated` | `i64[]` | 8 | для файла — своё; для каталога — сумма поддерева (unique) |
-| `logical` | `i64[]` | 8 | то же в логических байтах |
-| `fileCount` | `i32[]` | 4 | для каталога — файлов в поддереве |
-| `mtime` | `u32[]` | 4 | секунды от 2000-01-01 UTC (хватает до 2136) |
+| `parent` | `i32[]` | 4 | parent index, `-1` at a volume root |
+| `nameIdx` | `i32[]` | 4 | index into `NAME_IDX` |
+| `firstChild` | `i32[]` | 4 | first child index, `-1` if none |
+| `childCount` | `i32[]` | 4 | direct children |
+| `allocated` | `i64[]` | 8 | own size for a file, unique subtree sum for a directory |
+| `logical` | `i64[]` | 8 | the same in logical bytes |
+| `fileCount` | `i32[]` | 4 | files in the subtree |
+| `mtime` | `u32[]` | 4 | seconds since 2000-01-01 UTC (good to 2136) |
 | `attributes` | `u32[]` | 4 | Win32 `FileAttributes` |
 | `flags` | `u8[]` | 1 | `IsDir, Reparse, HardlinkAlias, CloudOnly, Sparse, SelfData, Encrypted, HasAds` |
-| `linkCount` | `u8[]` | 1 | число hardlink-ссылок, `255` = «255 и более» |
+| `linkCount` | `u8[]` | 1 | hard links, `255` means "255 or more" |
 | | | **46** | |
 
-1 млн узлов = **46 МБ** массивов + ~14 МБ блоб имён (сегменты дедуплицированы: `Microsoft`, `bin`, `node_modules` встречаются десятки тысяч раз) ≈ **60 МБ в памяти**, ~12–20 МБ на диске после deflate.
+1M nodes = **46 MB** of arrays plus ~14 MB of name blob (segments are deduplicated: `Microsoft`, `bin`, `node_modules` recur tens of thousands of times) ≈ **60 MB in memory**, 12–20 MB on disk after deflate. Loading is a `MemoryMappedFile` with sections decompressed on demand; the tree needs only `parent/nameIdx/firstChild/childCount/allocated/flags`.
 
-Загрузка: `MemoryMappedFile` + распаковка секций по требованию. Для дерева нужны только `parent/nameIdx/firstChild/childCount/allocated/flags` — можно не грузить остальное, пока не открыли детали.
-
-**Отсутствуют намеренно:**
-- `createdAt` — почти никогда не нужен для решения «удалять ли», экономит 4 МБ.
-- `accessedAt` — **на Windows это мёртвые данные**: `NtfsDisableLastAccessUpdate` включён по умолчанию с Vista. Показывать «last opened 3 years ago» на файле, открытом вчера, — вводить пользователя в заблуждение. Поле не собирается и не отображается.
-- Полные пути — восстанавливаются подъёмом по `parent` за микросекунды.
+**Deliberately absent:** `createdAt` (almost never decides whether to delete something); `accessedAt` — **dead data on Windows**, since `NtfsDisableLastAccessUpdate` has been on by default since Vista, and "last opened 3 years ago" for a file opened yesterday misleads; full paths, rebuilt by walking `parent` in microseconds.
 
 ### 5.4. Retention
 
-Жёсткое правило вместо тройной политики из v2:
-
 ```
-Keep:  последние 20 снимков
-   +   по одному на каждый календарный месяц за последние 12 месяцев
-Hard cap: суммарный размер snapshots\ ≤ 400 МБ; при превышении удаляем
-          самые старые «месячные», затем самые старые из 20 последних (кроме 3 свежих)
+Keep:  the last 20 snapshots
+   +   one per calendar month for the last 12 months
+Hard cap: snapshots\ <= 400 MB; over that, drop the oldest monthlies first,
+          then the oldest of the last 20 (never the 3 newest)
 ```
 
-Метаданные скана (строка в `scans`) живут вечно — это ~200 байт, и они нужны для графика «занято место во времени» на годы назад. Снимок при этом может быть уже удалён: тогда строка помечена `snapshot_available = 0`, скан можно смотреть только как агрегаты.
+Scan metadata (a row in `scans`) lives forever — ~200 bytes, and it is what draws the used-space graph years back. The snapshot may already be gone: the row is then marked `snapshot_available = 0` and the scan is viewable as aggregates only.
 
-*Реализовано в P4:* удалённый retention'ом снимок обнуляет `snapshot_path` в своей строке, `history` показывает такой скан со словом `deleted` вместо размера, `diff` отказывается его открывать с объяснением. Цифры (файлы, байты, тома, категории) остаются.
+*Implemented in P4:* a snapshot dropped by retention clears `snapshot_path`, `history` prints `deleted` instead of a size, and `diff` refuses to open it with an explanation. The numbers remain.
 
 ---
+## 6. Space Audit — the invisible space
 
-## 6. Space Audit — невидимое место
+A filesystem walk physically cannot see half of what fills a disk. This is a **separate subsystem of probes**, and for the "the disk is filling up hard" scenario it is worth more than the scan.
 
-Обход файловой системы физически не может увидеть половину того, что забивает диск. Это **отдельная подсистема проб**, и для сценария «диск жёстко забивается» она даёт больше ценности, чем скан.
+### 6.1. Probes
 
-### 6.1. Пробы
-
-Каждая проба возвращает `AuditFinding`:
+Each probe returns an `AuditFinding`:
 
 ```csharp
 record AuditFinding(
     string   Id,                 // "vss.shadow-storage"
     string   Title,              // "Volume Shadow Copies"
-    string   Volume,             // "C:"
+    string   Volume,
     long     UsedBytes,
-    long     ReclaimableBytes,   // сколько реально вернётся
+    long     ReclaimableBytes,   // what actually comes back
     Risk     Risk,               // Safe | Caution | Danger
     Recoverability Recoverability,
-    string   Explanation,        // English, 1–3 предложения
-    Remedy[] Remedies            // способы устранить
-);
+    string   Explanation,        // 1-3 sentences
+    Remedy[] Remedies);
 
 record Remedy(
     RemedyKind Kind,             // RunCommand | DeletePaths | OpenSettings | Manual
     string     Display,          // "dism /Online /Cleanup-Image /StartComponentCleanup"
     bool       NeedsElevation,
     bool       NeedsReboot,
-    string?    Caveat            // "Removes ability to uninstall installed updates"
-);
+    string?    Caveat);          // "Removes ability to uninstall installed updates"
 ```
 
-| ID | Что измеряет | Как | Типичный размер | Способ очистки |
-|---|---|---|---|---|
-| `vss.shadow-storage` | Теневые копии / точки восстановления | CIM `Win32_ShadowStorage`, `Win32_ShadowCopy` через `powershell.exe -NoProfile` из System32, ответ в JSON — байты целыми числами в любой локали; **только elevated** | 5–60 ГБ | `vssadmin delete shadows /for=C: /oldest`, либо уменьшить квоту `vssadmin resize shadowstorage` |
-| `winsxs.component-store` | Component store, реально удаляемая часть | `DISM /English /Online /Cleanup-Image /AnalyzeComponentStore`; парсинг по позиции строк `label : value`, не по словам; **только elevated**, без прав показывает размер из снимка с пометкой о hardlink | 2–12 ГБ | `DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase` ⚠️ |
-| `windows.old` | Предыдущая установка Windows | наличие + размер из снимка | 10–30 ГБ | `cleanmgr` handler `Previous Installations`, или удаление с `takeown` |
-| `wu.softwaredistribution` | Кэш Windows Update | размер `%WINDIR%\SoftwareDistribution\Download` | 1–20 ГБ | stop `wuauserv`+`bits` → clear → start |
-| `wu.delivery-optimization` | Кэш P2P-доставки обновлений | `Get-DeliveryOptimizationStatus`, `%WINDIR%\SoftwareDistribution\DeliveryOptimization` | 1–10 ГБ | `Delete-DeliveryOptimizationCache` |
-| `windows.installer-orphans` | Осиротевшие MSI/MSP в `%WINDIR%\Installer` | сверка с `HKLM\...\Uninstall` и `Installer\Products` | 2–15 ГБ | ⚠️ только отчёт + ручная проверка; авто-удаление ломает деинсталляцию |
-| `hiberfil` | Файл гибернации | размер из листинга корня (без открытия файла) + реестр `Power\HiberFileType` (1 = reduced, 2 = full); `powercfg` не вызывается | 0.4 × RAM | `powercfg /h /type reduced` или `powercfg /h off` |
-| `pagefile` | Файл подкачки | размер + `Win32_PageFileSetting` | 1–32 ГБ | System Properties → Advanced → Virtual Memory (`OpenSettings`) |
-| `swapfile` | Swapfile для UWP | размер | 256 МБ | вместе с pagefile |
-| `recyclebin` | Корзина по каждому тому | `SHQueryRecycleBinW` (`SHQUERYRBINFO` — 24 байта с естественным выравниванием, при `Pack=1` Shell отвечает `E_INVALIDARG`) | 0–50 ГБ | `SHEmptyRecycleBin` (в приложении, P6); до этого `Clear-RecycleBin` |
-| `wsl.vhdx` | Виртуальные диски WSL2 | реестр `Lxss` → `BasePath\ext4.vhdx`, logical vs allocated | 10–100 ГБ | `wsl --manage <d> --set-sparse true`, либо `diskpart` → `compact vdisk` |
-| `docker.vhdx` | Диски Docker Desktop | `%LOCALAPPDATA%\Docker\wsl\*\*.vhdx` | 10–80 ГБ | `docker system prune -a --volumes` затем compact |
-| `hyperv.vhdx` | VHD/VHDX вне Docker/WSL | из снимка по расширению | варьируется | `Optimize-VHD`, отчёт |
-| `dumps` | Crash dumps | `MEMORY.DMP`, `%LOCALAPPDATA%\CrashDumps`, `LiveKernelReports`, `Minidump` | 1–20 ГБ | удаление файлов (safe) |
-| `onedrive.local` | Локально материализованные облачные файлы | обход + `CloudOnly`-флаги | 10–200 ГБ | `attrib +U -P` (free up space) per-folder |
-| `fastboot.reserved` | Reserved storage (Win10 1903+) | `DISM /Online /Get-ReservedStorageState` | 4–7 ГБ | `DISM /Online /Set-ReservedStorageState /State:Disabled` |
-| `logs.cbs-panther` | `CBS.log`, `Panther`, `%WINDIR%\Logs` | размер | 0.5–5 ГБ | удаление (safe) |
-| `browser.caches` | Кэши Chrome/Edge/Firefox/Brave | известные пути | 1–15 ГБ | удаление при закрытом браузере (safe) |
-| `store.temp` | `%WINDIR%\Temp`, `%TEMP%`, `%LOCALAPPDATA%\Temp` | обход | 0.5–20 ГБ | удаление с пропуском занятых (safe) |
-| `defender.history` | `%ProgramData%\Microsoft\Windows Defender\Scans\History` | размер | 0.1–3 ГБ | удаление (safe) |
-| `ntfs.metadata` | `$MFT` + зарезервированные под метаданные кластеры | `FSCTL_GET_NTFS_VOLUME_DATA` через handle **корневого каталога** (`C:\` + `FILE_FLAG_BACKUP_SEMANTICS`), не через `\\.\C:`: том без `GENERIC_READ` открывается «напрямую в устройство», минуя NTFS, и FSCTL возвращает `ERROR_INVALID_FUNCTION`; `GENERIC_READ` на том требует прав. Каталог — нет. | 1–5 ГБ | **не освобождается**, только объяснение |
+| ID | What it measures | Typical | Cleanup |
+|---|---|---|---|
+| `vss.shadow-storage` | Shadow copies / restore points, via CIM (`powershell.exe -NoProfile` from System32, JSON out so byte counts are integers in any locale); **elevated only** | 5–60 GB | `vssadmin delete shadows /for=C: /oldest`, or shrink the quota |
+| `winsxs.component-store` | The genuinely removable part of the component store: `DISM /English /Online /Cleanup-Image /AnalyzeComponentStore`, parsed by `label : value` position rather than by words; **elevated only** | 2–12 GB | `DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase` ⚠️ |
+| `windows.old` | Previous Windows installation | 10–30 GB | `cleanmgr` handler `Previous Installations` |
+| `wu.softwaredistribution` | Windows Update cache | 1–20 GB | stop `wuauserv` + `bits` → clear → start |
+| `wu.delivery-optimization` | P2P update delivery cache | 1–10 GB | `Delete-DeliveryOptimizationCache` |
+| `windows.installer-orphans` | Orphaned MSI/MSP in `%WINDIR%\Installer`, cross-checked with the registry | 2–15 GB | ⚠️ report only; auto-deletion breaks uninstall |
+| `hiberfil` | Hibernation file: size from the root listing (no file opened) plus registry `HiberFileType` | 0.4 × RAM | `powercfg /h /type reduced` or `/h off` |
+| `pagefile` | Page file, plus `Win32_PageFileSetting` | 1–32 GB | System Properties → Virtual Memory |
+| `swapfile` | UWP swapfile | 256 MB | with the pagefile |
+| `recyclebin` | Recycle Bin per volume, via `SHQueryRecycleBinW` (`SHQUERYRBINFO` is 24 bytes with natural alignment; with `Pack=1` the Shell answers `E_INVALIDARG`) | 0–50 GB | `SHEmptyRecycleBin` (in-app, P6) |
+| `wsl.vhdx` | WSL2 disks from registry `Lxss`, logical vs allocated | 10–100 GB | `wsl --manage <d> --set-sparse true`, or `compact vdisk` |
+| `docker.vhdx` | Docker Desktop disks | 10–80 GB | `docker system prune -a --volumes`, then compact |
+| `hyperv.vhdx` | VHD/VHDX outside Docker and WSL | varies | `Optimize-VHD`, report |
+| `dumps` | `MEMORY.DMP`, `CrashDumps`, `LiveKernelReports`, `Minidump` | 1–20 GB | delete (safe) |
+| `onedrive.local` | Locally materialised cloud files | 10–200 GB | `attrib +U -P` per folder |
+| `fastboot.reserved` | Reserved storage (Win10 1903+) | 4–7 GB | `DISM /Online /Set-ReservedStorageState /State:Disabled` |
+| `logs.cbs-panther` | `CBS.log`, `Panther`, `%WINDIR%\Logs` | 0.5–5 GB | delete (safe) |
+| `browser.caches` | Chrome / Edge / Firefox / Brave | 1–15 GB | delete with the browser closed |
+| `store.temp` | `%WINDIR%\Temp`, `%TEMP%`, `%LOCALAPPDATA%\Temp` | 0.5–20 GB | delete, skipping locked files |
+| `defender.history` | `Windows Defender\Scans\History` | 0.1–3 GB | delete (safe) |
+| `ntfs.metadata` | `$MFT` plus reserved clusters, through `FSCTL_GET_NTFS_VOLUME_DATA` on a handle to the **root directory** (`C:\` + `FILE_FLAG_BACKUP_SEMANTICS`), not `\\.\C:`: a volume opened without `GENERIC_READ` goes straight to the device, bypassing NTFS, and the FSCTL returns `ERROR_INVALID_FUNCTION` — while `GENERIC_READ` on a volume needs rights and on a directory does not | 1–5 GB | **not reclaimable**, explanation only |
 
-### 6.2. Развёрнутый вывод
+### 6.2. Output
 
 ```
 $ pathmemo audit
@@ -533,7 +454,6 @@ Volume C:   476.1 GB total   ·   21.3 GB free   ·   95.5% used
     12 restore points, oldest 2026-02-11. Windows keeps these for
     System Restore and Previous Versions.
     → vssadmin delete shadows /for=C: /oldest        [admin]
-    → vssadmin resize shadowstorage /for=C: /maxsize=10GB   [admin]
 
   WSL2 virtual disks                          31.2 GB   caution
     Ubuntu-22.04: 44.1 GB on disk, 12.9 GB used inside. WSL disks
@@ -542,135 +462,94 @@ Volume C:   476.1 GB total   ·   21.3 GB free   ·   95.5% used
     ⚠ Shut down WSL first: wsl --shutdown
 
   Component store (WinSxS)                     6.8 GB   caution
-    DISM reports 6.8 GB of superseded components.
-    → dism /Online /Cleanup-Image /StartComponentCleanup   [admin]
-    ⚠ /ResetBase additionally blocks uninstalling current updates
-
   Hibernation file                             6.4 GB   caution
-    hiberfil.sys. Disabling removes Fast Startup and hibernate.
-    → powercfg /h off                                 [admin]
-    → powercfg /h /size 40    (reduce to 40% instead)  [admin]
-
   Recycle Bin                                  4.1 GB   safe
-    1,204 items.
-    → [Empty now]
-
   Windows Update cache                         2.9 GB   safe
   Crash dumps                                  1.2 GB   safe
-  Temp directories                             0.8 GB   safe
 
   NOT RECLAIMABLE                                         3.9 GB
   ──────────────────────────────────────────────────────────────
   NTFS metadata ($MFT 2.4 GB, $LogFile 0.1 GB, other 1.4 GB)
 
   Run `pathmemo audit --id vss.shadow-storage` for details.
-  Run `pathmemo scan` to find large files and folders.
 ```
 
-### 6.3. Правила для проб
+### 6.3. Rules for probes
 
-- Проба **не выполняет** ничего изменяющего систему. Только чтение.
-- Внешние утилиты вызываются только для **чтения** (`DISM /Analyze...`, `vssadmin list`, `powercfg /a`) — через `Process.Start` с `ArgumentList`, без shell, с таймаутом 30 с, из `%WINDIR%\System32` по полному пути (защита от PATH hijacking).
-- Парсинг вывода `DISM`/`vssadmin` завязан на локаль. Поэтому: `CultureInfo.InvariantCulture` в окружении процесса, парсинг по числам и структуре, а не по английским словам; при неудаче парсинга — проба возвращает `Unknown`, а не ноль.
-- Устранение (`Remedy`) по умолчанию **только показывается и копируется в буфер**. Выполнение — только по явной команде `pathmemo audit --apply <id>` или кнопке в TUI, всегда с подтверждением, всегда с логированием. `RemedyKind.RunCommand` с `NeedsElevation` требует отдельного elevated-процесса.
+- A probe **changes nothing**. Read-only, always.
+- External tools are invoked for **reading** only (`DISM /Analyze...`, `vssadmin list`, `powercfg /a`) — `Process.Start` with `ArgumentList`, no shell, 30 s timeout, by absolute path from `%WINDIR%\System32` (PATH-hijacking defence).
+- `DISM` and `vssadmin` output is locale-dependent, so: invariant culture in the process environment, parsing by numbers and structure rather than English words, and `Unknown` rather than zero when parsing fails.
+- A `Remedy` is by default **displayed and copied to the clipboard**, nothing more. Execution needs an explicit `pathmemo audit --apply <id>` or a TUI key, always confirmed, always logged.
 
-### 6.4. Как это реализовано (P2)
+### 6.4. Implementation notes (P2)
 
-- **Изоляция проб.** `AuditRunner` запускает пробы параллельно (`Parallel.For`, ≤ 8 потоков); каждая ограничена 45 с, исключение или таймаут превращаются в finding со `status=error` и текстом причины — отчёт не пропадает из-за одной пробы. Проба, которая не может измерить, возвращает `NeedsElevation` / `NoSnapshot` / `Unknown` / `NotApplicable`, но никогда не «0 байт».
-- **Два числа, оба nullable.** `UsedBytes` — сколько занято, `ReclaimableBytes` — сколько вернётся. WSL и Docker знают первое и не знают второго (сколько свободно внутри vhdx видно только изнутри, а запуск дистрибутива ради вопроса — не read-only действие). Такие пробы попадают в секцию `WORTH A LOOK`, а не в сумму `RECLAIMABLE`. `pagefile` — особый случай: reclaimable равен размеру, если есть другой фиксированный том с > 20 ГБ свободно, и проба прямо советует перенести файл подкачки туда; иначе 0.
-- **Измерение каталогов** (`DirectoryMeasure`): размер на диске — логический, округлённый вверх до кластера, и только для файлов с атрибутами `Compressed` или `SparseFile` вызывается `GetCompressedFileSize`. Атрибуты уже лежат в буфере перечисления, поэтому это бесплатно; замер на `%TEMP%` из 175 тыс. файлов: 20 с с вызовом на каждый файл, ~3 с без. Reparse points не считаются и не обходятся, cloud-плейсхолдеры — 0 байт на диске. Ошибки доступа считаются, а не бросаются: «нижняя граница + пометка» полезнее пустого результата.
-- **Внешние утилиты** (`ExternalTool`): только `%WINDIR%\System32\*` по абсолютному пути, `ArgumentList`, без окна, без `__COMPAT_LAYER`, таймаут с `Kill(entireProcessTree)`. Вывод декодируется в OEM-кодовой странице консоли (`CodePagesEncodingProvider` регистрируется один раз). Два вызова во всём аудите, оба только elevated: DISM (`/English` фиксирует формат) и `powershell.exe` для CIM.
-- **`--apply` отложен до P6**: команда, изменяющая систему, должна попадать в журнал операций (§9.7), а журнала ещё нет. Сейчас есть `--copy` / `--copy-index <n>` (буфер обмена через `OpenClipboard`/`SetClipboardData` на STA-потоке, §15.1) и `c<n>` в интерактивном режиме.
-- **Что пробы не умеют без прав администратора:** VSS, DISM (WinSxS, точный статус reserved storage), `Minidump`/`LiveKernelReports`, `Defender\Scans\History`, часть `Windows\Logs`. На реальной машине без прав отвечают 16 проб из 21, за 4.1 с.
-- *P4:* результаты полного прогона пишутся в `audit_findings` (§11) с привязкой к скану, который проба использовала. На настоящей машине это 17 строк из 21 пробы: `not applicable` не записывается. Отдельная проба (`--id`) не пишет ничего — это разовая проверка, а не точка истории.
+- **Probe isolation.** `AuditRunner` runs probes in parallel (≤ 8 threads), each capped at 45 s; an exception or timeout becomes a finding with `status=error`, so one probe cannot take the report down. A probe that cannot measure returns `NeedsElevation` / `NoSnapshot` / `Unknown` / `NotApplicable` — never "0 bytes".
+- **Two numbers, both nullable.** WSL and Docker know `UsedBytes` and not `ReclaimableBytes` (free space inside a vhdx is visible only from inside, and booting a distro to ask is not a read-only act), so they land in a `WORTH A LOOK` section rather than the `RECLAIMABLE` total. `pagefile` is special: reclaimable equals its size if another fixed volume has > 20 GB free, and the probe suggests moving it there; otherwise 0.
+- **Directory measurement** (`DirectoryMeasure`): size on disk is the logical size rounded up to the cluster, and `GetCompressedFileSize` is called only for files flagged `Compressed` or `SparseFile`. The attributes are already in the enumeration buffer, so this is free: measuring a 175k-file `%TEMP%` took 20 s with a call per file and ~3 s without. Reparse points are neither counted nor entered; access errors are counted, not thrown — "a lower bound plus a note" beats an empty result.
+- **External tools** (`ExternalTool`): `%WINDIR%\System32\*` by absolute path only, no window, no `__COMPAT_LAYER`, timeout with `Kill(entireProcessTree)`, output decoded in the console OEM code page. Two invocations in the whole audit, both elevated-only: DISM (`/English` pins the format) and `powershell.exe` for CIM.
+- **`--apply` is deferred to P6**: a command that changes the system belongs in the operations journal (§9.7), which does not exist yet. What exists is `--copy` / `--copy-index <n>` (§15.1) and `c<n>` interactively.
+- **Unelevated**, VSS, DISM, `Minidump`, `Defender\Scans\History` and part of `Windows\Logs` cannot answer; 16 of 21 probes still do, in 4.1 s.
+- *P4:* a full run writes to `audit_findings` (§11) tied to the scan the probe used — 17 rows out of 21 on a real machine, since `not applicable` is not recorded. A single probe (`--id`) writes nothing: a spot check, not a point of history.
 
 ---
 
-## 7. Reclaim — рекомендации по очистке
+## 7. Reclaim — cleanup recommendations
 
-### 7.1. Две независимые оси вместо одного «риска»
+### 7.1. Two independent axes instead of one "risk"
 
-v2 имела одну ось (safe/caution/danger), что смешивало несовместимые вещи: удаление `node_modules` («потеряю 10 минут») и удаление `.git\objects` («потеряю работу») попадали в одну корзину.
+A single safe/caution/danger axis mixes incompatible things: deleting `node_modules` ("I lose 10 minutes") and deleting `.git\objects` ("I lose the work") end up in one bucket.
 
-**Ось 1 — Risk: что сломается.**
+**Axis 1 — Risk: what breaks.** `Safe` — nothing; the application recreates it. `Caution` — functionality or a way back is lost (update uninstall, hibernate, history); reversible, but it takes work. `Danger` — may break the system or an application; requires typing a confirmation word.
 
-| Уровень | Смысл |
-|---|---|
-| `Safe` | Ничего не сломается. Приложение пересоздаст при необходимости. |
-| `Caution` | Потеряется функциональность или возможность откатиться (uninstall обновления, hibernate, история). Обратимо, но требует действий. |
-| `Danger` | Может сломать систему или приложение. Требует ввода подтверждающего слова. |
+**Axis 2 — Recoverability: what getting it back costs.** `Instant` — recreated automatically on next use (browser, thumbnail, shader caches). `Redownload` — fetched from the network (`node_modules`, `.nuget\packages`, Docker images). `Rebuild` — rebuilt locally, costs CPU time (`obj/`, Unity `Library/`, `.venv`). `Irreversible` — personal files, the only copy of an installer, `.git` objects.
 
-**Ось 2 — Recoverability: чего будет стоить вернуть.**
+The UI shows both: `safe · redownload` means go ahead; `caution · irreversible` means think.
 
-| Уровень | Смысл | Примеры |
-|---|---|---|
-| `Instant` | Пересоздастся автоматически при следующем использовании | browser cache, thumbnail cache, shader cache |
-| `Redownload` | Скачается из сети | `node_modules`, `.nuget\packages`, pip cache, Docker images |
-| `Rebuild` | Пересоберётся локально, стоит времени CPU | `obj/`, `bin/`, Unity `Library/`, Unreal `DerivedDataCache/`, `.venv` |
-| `Irreversible` | Восстановить нельзя | личные файлы, единственная копия установщика, `.git` objects |
+### 7.2. Default rules
 
-UI показывает обе: `safe · redownload` — можно смело; `caution · irreversible` — думать.
+Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 
-### 7.2. Правила по умолчанию
-
-Формат — **глобы**, не regex (см. §12.2). Все правила — данные, не код.
-
-#### Кэши разработки
-
-| Rule | Pattern | Risk | Recov. | Правильный способ |
+| Rule | Pattern | Risk | Recov. | Right way |
 |---|---|---|---|---|
-| `dev.node_modules` | `**\node_modules` | Safe | Redownload | delete; `npm ci` восстановит |
+| `dev.node_modules` | `**\node_modules` | Safe | Redownload | delete; `npm ci` restores |
 | `dev.npm_cache` | `%LOCALAPPDATA%\npm-cache`, `~\.npm\_cacache` | Safe | Redownload | `npm cache clean --force` |
 | `dev.pnpm_store` | `%LOCALAPPDATA%\pnpm\store` | Safe | Redownload | `pnpm store prune` |
 | `dev.yarn_cache` | `%LOCALAPPDATA%\Yarn\Cache` | Safe | Redownload | `yarn cache clean` |
 | `dev.nuget` | `~\.nuget\packages`, `%LOCALAPPDATA%\NuGet\v3-cache` | Safe | Redownload | `dotnet nuget locals all --clear` |
-| `dev.dotnet_artifacts` | `**\bin\Debug`, `**\bin\Release`, `**\obj` | Safe | Rebuild | delete |
-| `dev.gradle` | `~\.gradle\caches` | Safe | Redownload | `gradle --stop` затем delete |
+| `dev.dotnet_artifacts` | `**\bin\{Debug,Release}`, `**\obj` | Safe | Rebuild | delete |
+| `dev.gradle` | `~\.gradle\caches` | Safe | Redownload | `gradle --stop`, then delete |
 | `dev.maven` | `~\.m2\repository` | Safe | Redownload | delete |
 | `dev.pip_cache` | `%LOCALAPPDATA%\pip\Cache` | Safe | Redownload | `pip cache purge` |
 | `dev.pycache` | `**\__pycache__`, `**\*.pyc` | Safe | Rebuild | delete |
-| `dev.venv` | `**\.venv`, `**\venv`, `**\env\Scripts\python.exe` → родитель | Safe | **Rebuild** | delete; `pip install -r` восстановит |
-| `dev.cargo` | `~\.cargo\registry`, `**\target\debug`, `**\target\release` | Safe | Rebuild | `cargo clean` |
+| `dev.venv` | `**\.venv`, `**\venv` | Safe | Rebuild | delete; `pip install -r` restores |
+| `dev.cargo` | `~\.cargo\registry`, `**\target\{debug,release}` | Safe | Rebuild | `cargo clean` |
 | `dev.go_modcache` | `~\go\pkg\mod` | Safe | Redownload | `go clean -modcache` |
-| `dev.conda_pkgs` | `**\anaconda3\pkgs`, `**\miniconda3\pkgs` | Safe | Redownload | `conda clean --all` |
-| `dev.unity_library` | `**\Library\ArtifactDB` + сиблинг `Assets\` | Safe | Rebuild | delete (долгий реимпорт) |
+| `dev.conda_pkgs` | `**\{anaconda3,miniconda3}\pkgs` | Safe | Redownload | `conda clean --all` |
+| `dev.unity_library` | `**\Library\ArtifactDB` with a sibling `Assets\` | Safe | Rebuild | delete (slow reimport) |
 | `dev.unreal_ddc` | `**\DerivedDataCache`, `**\Intermediate`, `**\Saved\Autosaves` | Safe | Rebuild | delete |
-| `dev.git_gc` | `**\.git` где `objects` > 500 МБ | **Caution** | **Irreversible** | **`git gc --prune=now --aggressive`** — никогда не удалять `objects` напрямую |
+| `dev.git_gc` | `**\.git` where `objects` > 500 MB | **Caution** | **Irreversible** | **`git gc --prune=now`** — never delete `objects` directly |
 | `dev.docker` | Docker vhdx | Caution | Redownload | `docker system prune -a --volumes` |
-| `dev.vs_artifacts` | `**\.vs`, `**\.vscode-server\data\CachedExtensionVSIXs` | Safe | Instant | delete |
+| `dev.vs_artifacts` | `**\.vs`, `**\CachedExtensionVSIXs` | Safe | Instant | delete |
+| `app.browser_cache` | Chromium `**\User Data\*\Cache*`, `**\GPUCache`; Firefox `**\cache2` | Safe | Instant | delete |
+| `app.electron_cache` | `%APPDATA%\{Slack,discord,Teams,...}\Cache`, `**\ShaderCache` | Safe | Instant | delete |
+| `app.shader_cache` | `%LOCALAPPDATA%\{NVIDIA,AMD,D3DSCache}`, Steam `shadercache` | Safe | Instant | delete |
+| `app.steam_downloading` | `**\steamapps\{downloading,temp}` | Safe | Redownload | delete |
+| `app.adobe_media_cache` | `%APPDATA%\Adobe\Common\Media Cache*` | Safe | Rebuild | delete |
+| `app.apple_backups` | `%APPDATA%\Apple Computer\MobileSync\Backup` | **Caution** | **Irreversible** | manual |
+| `sys.temp` | `%TEMP%`, `%WINDIR%\Temp`, `%LOCALAPPDATA%\Temp` | Safe | Instant | delete |
+| `sys.thumbnails` | `**\Explorer\thumbcache_*.db` | Safe | Instant | delete |
+| `sys.old_logs` | `*.log`, `*.etl` older than 30 days outside `%ProgramData%` | Safe | Irreversible | delete |
+| `sys.dumps` | `**\CrashDumps`, `MEMORY.DMP`, `**\Minidump` | Safe | Irreversible | delete |
+| `user.old_installers` | `%USERPROFILE%\Downloads\*.{msi,exe,iso}` older than 90 days | Caution | Redownload* | delete |
+| `user.large_media` | `*.{iso,vhd,vhdx,img,bak,vmdk}` over 1 GB | Caution | Irreversible | manual |
 
-#### Приложения и система
+\* `Redownload` with the caveat "unless it's a license-bound installer".
 
-| Rule | Pattern | Risk | Recov. |
-|---|---|---|---|
-| `app.browser_cache` | Chrome/Edge/Brave `**\User Data\*\Cache*`, `**\Code Cache`, `**\GPUCache`; Firefox `**\cache2` | Safe | Instant |
-| `app.electron_cache` | `%APPDATA%\{Slack,discord,Teams,...}\Cache`, `**\GPUCache`, `**\ShaderCache` | Safe | Instant |
-| `app.shader_cache` | `%LOCALAPPDATA%\{NVIDIA,AMD,D3DSCache}`, Steam `shadercache` | Safe | Instant |
-| `app.steam_downloading` | `**\steamapps\downloading`, `**\steamapps\temp` | Safe | Redownload |
-| `app.adobe_media_cache` | `%APPDATA%\Adobe\Common\Media Cache*` | Safe | Rebuild |
-| `app.apple_backups` | `%APPDATA%\Apple Computer\MobileSync\Backup` | **Caution** | **Irreversible** |
-| `sys.temp` | `%TEMP%`, `%WINDIR%\Temp`, `%LOCALAPPDATA%\Temp` | Safe | Instant |
-| `sys.thumbnails` | `%LOCALAPPDATA%\Microsoft\Windows\Explorer\thumbcache_*.db` | Safe | Instant |
-| `sys.old_logs` | `*.log`, `*.etl` старше 30 дней вне `%ProgramData%` | Safe | Irreversible |
-| `sys.dumps` | `**\CrashDumps`, `MEMORY.DMP`, `**\Minidump` | Safe | Irreversible |
-| `user.old_installers` | `%USERPROFILE%\Downloads\*.{msi,exe,iso,dmg,pkg}` старше 90 дней | Caution | Redownload* |
-| `user.large_media` | `*.{iso,vhd,vhdx,img,bak,vmdk}` больше 1 ГБ | Caution | Irreversible |
+**Deliberately not rules:** `hiberfil.sys`, `pagefile.sys`, `swapfile.sys` — in use and undeletable; they are an `AuditFinding` with a `powercfg` command. `WinSxS` — deleting it by hand breaks the system irreversibly; `DISM` only. `C:\Windows\Installer` — breaks uninstall and updates; report only. `System Volume Information` — VSS API only. `.git\objects` — destroys the repository; `git gc` only.
 
-\* помечается `Redownload` с оговоркой «unless it's a license-bound installer».
+### 7.3. Estimating the gain
 
-#### Явно исключено из правил
-
-| Не является правилом | Почему |
-|---|---|
-| `hiberfil.sys`, `pagefile.sys`, `swapfile.sys` | **Файлы заняты, их нельзя удалить.** Это `AuditFinding` с командой `powercfg`, а не цель удаления. |
-| `C:\Windows\WinSxS` | Удаление руками ломает систему необратимо. Только через `DISM`. |
-| `C:\Windows\Installer` | Удаление ломает деинсталляцию и обновление приложений. Только отчёт. |
-| `System Volume Information` | Управляется только через VSS API. |
-| `.git\objects` | Уничтожает репозиторий. Только `git gc`. |
-
-### 7.3. Оценка выгоды
-
-Для каждой найденной цели считаем **reclaimable** (§3.1), а не сумму размеров, и группируем:
+Every match is scored by **reclaimable** (§3.1), not by the sum of sizes:
 
 ```
 $ pathmemo reclaim --scan 43
@@ -681,7 +560,6 @@ $ pathmemo reclaim --scan 43
   dev.unity_library                 3   12.4 GB   12.4 GB   safe     rebuild
   app.browser_cache                 6    4.1 GB    4.1 GB   safe     instant
   dev.dotnet_artifacts            212    3.8 GB    3.8 GB   safe     rebuild
-  dev.nuget                         1    3.1 GB    3.1 GB   safe     redownload
   sys.temp                          4    1.9 GB    1.4 GB   safe     instant     (0.5 GB locked)
   dev.git_gc                        8    2.2 GB    1.6 GB   caution  irreversible → use git gc
   user.old_installers              23    6.7 GB    6.7 GB   caution  redownload
@@ -693,9 +571,9 @@ $ pathmemo reclaim --scan 43
   pathmemo reclaim --scan 43 --risk safe --apply      execute
 ```
 
-### 7.4. Пользовательские правила и исключения
+### 7.4. Custom rules and exclusions
 
-Всё в `config.json` — **единственный источник правды** (в v2 правила дублировались между БД и конфигом). Управление из TUI/CLI редактирует этот файл.
+Everything lives in `config.json`, the **single source of truth**; the TUI and CLI edit that file.
 
 ```json
 {
@@ -706,75 +584,65 @@ $ pathmemo reclaim --scan 43
         "risk": "safe", "recoverability": "rebuild", "minSizeBytes": 104857600 }
     ]
   },
-  "keep": [
-    "C:\\Users\\me\\projects\\important\\node_modules",
-    "D:\\archive\\**"
-  ]
+  "keep": ["C:\\Users\\me\\projects\\important\\node_modules", "D:\\archive\\**"]
 }
 ```
 
-`keep` — пути и глобы, которые **никогда** не попадут в рекомендации и не могут быть удалены через pathmemo. Добавляется клавишей `K` в TUI.
+`keep` holds paths and globs that **never** appear in recommendations and cannot be deleted through pathmemo. `K` in the TUI adds one.
 
 ---
 
-## 8. Дубликаты
+## 8. Duplicates
 
-### 8.1. Алгоритм
+### 8.1. Algorithm
 
 ```
 Stage 0  filter
-         · размер >= minSize (по умолчанию 1 МБ)
-         · размер != 0
-         · не CloudOnly, не Reparse, не Encrypted
-         · не в `keep`
-         · группировка по размеру → уникальные размеры отброшены
+         · size >= minSize (1 MB by default), size != 0
+         · not CloudOnly, not Reparse, not Encrypted, not in `keep`
+         · group by size; unique sizes dropped
 
-Stage 1  hardlink collapse
-         · файлы с одинаковым (VolumeSerial, FileReferenceNumber) — это ОДИН файл.
-           Группируем их как `HardlinkSet`, экономия от удаления = 0.
-           Показываются отдельно от настоящих дубликатов.
+Stage 1  hard-link collapse
+         · files sharing (VolumeSerial, FileReferenceNumber) are ONE file:
+           grouped as a `HardlinkSet`, saving from deletion = 0
 
-Stage 2  partial hash — XxHash128 от первых 64 КБ + последних 64 КБ
-         (или всего файла, если <= 128 КБ). Одиночки отброшены.
+Stage 2  partial hash - XxHash128 of the first and last 64 KB
+         (or the whole file when <= 128 KB); singletons dropped
 
-Stage 3  full hash — XxHash128 потоково, буфер 1 МБ, ArrayPool.
+Stage 3  full hash - XxHash128 streamed, 1 MB buffer, ArrayPool
 
-Stage 4  byte-for-byte verification финальных кандидатов
-         · попарное сравнение внутри группы, 1 МБ блоками
-         · даёт МАТЕМАТИЧЕСКУЮ гарантию вместо вероятностной, стоит того же IO
-         · групп-кандидатов после stage 3 обычно единицы — дёшево
+Stage 4  byte-for-byte verification of the finalists
+         · pairwise inside the group, 1 MB blocks
+         · a MATHEMATICAL guarantee instead of a probabilistic one, for the same IO
+         · few groups survive stage 3, so it is cheap
 ```
 
-### 8.2. Почему XxHash128, а не BLAKE3
+### 8.2. Why XxHash128 and not BLAKE3
 
-- Узкое место — **IO, а не хеш**: 100 МБ/с на HDD, 500–3000 МБ/с на NVMe. XxHash3 делает 10+ ГБ/с, BLAKE3 — 2–5 ГБ/с. Разницы на практике нет.
-- `System.IO.Hashing.XxHash128` — **в коробке, managed, нулевая нативная зависимость**. BLAKE3.NET — ещё одна нативная DLL в self-extract, ещё +200 мс старта, проблемы с trimming/AOT и отдельная сборка под arm64.
-- Криптостойкость **не нужна**: мы не защищаемся от злонамеренной коллизии, и после stage 4 гарантия абсолютная.
-- **MD5 удалён из выбора.** Он медленнее, слабее и создаёт ложное впечатление «это же криптохеш».
-- Опция `--hash sha256` оставлена для случая «хочу хеш, который можно сверить с чужим инструментом», но не как дефолт.
+The bottleneck is **IO, not hashing**: 100 MB/s on an HDD, 500–3000 MB/s on NVMe, against 10+ GB/s for XxHash3 and 2–5 GB/s for BLAKE3. `System.IO.Hashing.XxHash128` is in the box, managed, with zero native dependencies, while BLAKE3.NET means another native DLL in the self-extract, +200 ms of startup, trimming and AOT trouble and a separate arm64 build. Cryptographic strength is not needed: there is no adversary here, and stage 4 makes the guarantee absolute. MD5 was dropped — slower, weaker, and it creates the false impression of being a "crypto hash". `--hash sha256` stays for comparing with another tool, but not as the default.
 
-### 8.3. Кэш хешей
+### 8.3. Hash cache
 
-Ключ — **не путь** (в v2 переименование сбрасывало кэш):
+The key is **not the path** — renaming would throw the cache away:
 
 ```sql
 PRIMARY KEY (volume_serial, file_id_low, file_id_high, size_bytes, mtime_unix)
 ```
 
-Вытеснение: LRU по `last_used_at`, жёсткий лимит 200 тыс. записей (~30 МБ). Инвалидация целиком при смене `hash_algo`.
+Eviction is LRU by `last_used_at`, hard-capped at 200k rows (~30 MB). Changing `hash_algo` invalidates everything.
 
-### 8.4. Безопасность операций
+### 8.4. Operation safety
 
-- **В группе всегда остаётся минимум один файл.** UI не позволяет снять отметку с последнего; CLI отказывается с exit-кодом `EX_UNSAFE`.
-- **Выбор «оригинала» никогда не автоматический без показа.** Эвристика предлагает, пользователь подтверждает. Приоритет: (1) не в `Temp`/`Downloads`/кэшах, (2) меньшая глубина пути, (3) в пути есть `keep`-совпадение → всегда оригинал, (4) старший `mtime`. «Самый старый файл» как единственный критерий отвергнут: старший обычно как раз во `Downloads\tmp`.
-- **Перед удалением — повторная проверка.** Размер, mtime и полный хеш **оставляемого** и **удаляемого** пересчитываются заново. Расхождение → отмена всей операции.
-- Дубликаты ищутся **между томами** (типичный случай: бэкап фото на D: и оригиналы на C:). Группа не привязана к одному корню скана.
-- Файлы открываются с `FileShare.ReadWrite | FileShare.Delete` (иначе половина `AppData` нечитаема) и `FILE_FLAG_SEQUENTIAL_SCAN`.
-- **Cloud placeholders никогда не хешируются.** Чтение placeholder'а вызывает скачивание — «поиск дубликатов» мог бы утянуть 200 ГБ трафика и **забить** диск. Проверяем `FILE_ATTRIBUTE_RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS | OFFLINE` до открытия и открываем с `FILE_FLAG_OPEN_NO_RECALL` как второй барьер.
+- **At least one file always survives a group.** The UI refuses to unmark the last one; the CLI exits `EX_UNSAFE`.
+- **The "original" is never chosen automatically without showing it.** Priority: not in `Temp`/`Downloads`/caches; shallower path; a `keep` match always wins; older `mtime` last. "Oldest file" alone was rejected — the oldest is usually the one in `Downloads\tmp`.
+- **Everything is re-verified before deletion.** Size, mtime and the full hash of both survivor and victim are recomputed; any mismatch cancels the whole operation.
+- Duplicates are searched **across volumes** (photos backed up to D: with the originals on C:).
+- Files are opened with `FileShare.ReadWrite | FileShare.Delete` (otherwise half of `AppData` is unreadable) and `FILE_FLAG_SEQUENTIAL_SCAN`.
+- **Cloud placeholders are never hashed.** Reading one triggers a download, so "find duplicates" could pull 200 GB of traffic and **fill** the disk. Attributes are checked before opening, and `FILE_FLAG_OPEN_NO_RECALL` is the second barrier.
 
-### 8.5. Предупреждение про антивирус
+### 8.5. Antivirus warning
 
-Полный проход чтения заставляет Defender просканировать всё прочитанное. Перед стартом:
+A full read pass makes Defender scan everything read. Before starting:
 
 ```
 Hashing will read 84.2 GB from disk. Real-time antivirus scanning may
@@ -788,29 +656,23 @@ pathmemo will not change your security settings.
 ```
 
 ---
+## 9. Deletion
 
-## 9. Удаление
+The most dangerous module. Designed so that nothing is deleted until three independent checks agree.
 
-Самый опасный модуль. Спроектирован как «ничто не удаляется, пока три независимые проверки не согласились».
+### 9.1. The Recycle Bin does not free space
 
-### 9.1. Корзина не освобождает место
+`$Recycle.Bin` lives **on the same volume**: moving 40 GB into it frees **0 bytes**. On top of that, the bin has a quota (~5% of the volume by default) and the Shell **silently deletes forever** anything larger — so the "safe" path is more dangerous than the direct one; moving 200k small files into it takes minutes and writes an `$I` record for each; and there is no bin on network drives, often none on removable ones, and different behaviour on ReFS.
 
-Главное исправление относительно v2. `$Recycle.Bin` находится **на том же томе**: перемещение 40 ГБ в корзину освобождает **0 байт**. Плюс:
+### 9.2. Three modes, chosen by context
 
-- у корзины есть квота (по умолчанию ~5% тома); файл больше квоты Shell **удалит навсегда, молча** — то есть «безопасный» путь оказывается опаснее прямого;
-- перемещение 200 тыс. мелких файлов (`node_modules`) в корзину занимает минуты, создавая `$I`-запись на каждый;
-- корзины нет на сетевых дисках, часто нет на съёмных, поведение на ReFS иное;
-- `recycle_bin_id` через Shell API **получить нечем** — поле в схеме v2 было нереализуемо.
-
-### 9.2. Три режима, выбираемые по контексту
-
-| Режим | Когда | Освобождает место сразу | Откат |
+| Mode | When | Frees space now | Undo |
 |---|---|---|---|
-| `Recycle` | ≤ 100 файлов, суммарно ≤ 500 МБ, том имеет корзину, `Recoverability != Instant` | **нет** | Проводник → Восстановить |
-| `Quarantine` | по умолчанию для всего остального | нет (до `purge`) | `pathmemo restore <op-id>` |
-| `Permanent` | явный `--permanent` / клавиша `Shift+D`, либо `Recoverability == Instant` по умолчанию | **да** | нет |
+| `Recycle` | ≤ 100 files, ≤ 500 MB total, the volume has a bin, `Recoverability != Instant` | **no** | Explorer → Restore |
+| `Quarantine` | default for everything else | no (until `purge`) | `pathmemo restore <op-id>` |
+| `Permanent` | explicit `--permanent` / `Shift+D`, or `Recoverability == Instant` | **yes** | none |
 
-UI всегда показывает, что произойдёт, без эвфемизмов:
+The UI always says what will happen, without euphemism:
 
 ```
 Delete 47 items · 18.2 GB
@@ -824,125 +686,110 @@ Delete 47 items · 18.2 GB
   [Enter] proceed   [L] list items   [Esc] cancel
 ```
 
-Для `Permanent` при суммарном размере > 1 ГБ или Risk ≥ `Caution` — подтверждение вводом:
-```
-Type  delete 47  to confirm permanent deletion:  _
-```
+`Permanent` over 1 GB, or at Risk ≥ `Caution`, requires typing `delete 47` to confirm.
 
-### 9.3. Канонизация пути и защита
+### 9.3. Path canonicalisation and protection
 
-**Строковое сравнение путей отвергнуто как небезопасное.** Защитный список из v2 обходился двенадцатью способами:
+**String comparison of paths was rejected as unsafe.** A list of literal strings can be walked around at least twelve ways:
 
 ```
-c:\windows                      регистр
-C:\Windows\                     завершающий слеш
-C:\WINDOW~1                     короткое имя 8.3
-\\?\C:\Windows                  Win32-префикс
-\\.\C:\Windows                  device-префикс
-\\localhost\c$\Windows          UNC на себя
-\\127.0.0.1\c$\Windows          то же
-C:\Users\..\Windows             обход через ..
-C:\Documents and Settings\...   junction → C:\Users
-C:\Users\All Users\...          junction → C:\ProgramData
-D:\mnt\sys\...                  mount point на системный том
+c:\windows                      case
+C:\Windows\                     trailing slash
+C:\WINDOW~1                     8.3 short name
+\\?\C:\Windows                  Win32 prefix
+\\.\C:\Windows                  device prefix
+\\localhost\c$\Windows          UNC to self
+\\127.0.0.1\c$\Windows          the same
+C:\Users\..\Windows             traversal
+C:\Documents and Settings\...   junction -> C:\Users
+C:\Users\All Users\...          junction -> C:\ProgramData
+D:\mnt\sys\...                  mount point onto the system volume
 ```
-плюс жёстко зашитый `C:\` неверен: системный том может быть не C:.
 
-**Алгоритм проверки перед любым удалением:**
+and a hard-coded `C:\` is wrong to begin with — the system volume need not be C:.
 
 ```
-1. Открыть handle:
+1. Open a handle:
      CreateFileW(path, 0 /* query only */,
                  FILE_SHARE_READ|WRITE|DELETE, NULL, OPEN_EXISTING,
                  FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL)
-   Не удалось открыть → отказ. Никогда не удаляем то, что не смогли открыть.
+   Cannot open -> refuse. We never delete what we could not open.
 
 2. canonical = GetFinalPathNameByHandleW(h, VOLUME_NAME_GUID)
-   → \\?\Volume{GUID}\Windows\System32  — устраняет всё из списка выше
+   -> \\?\Volume{GUID}\Windows\System32, which eliminates every line above.
 
-3. Проверить canonical против ProtectedSet (тоже канонизированного при старте):
-     · KnownFolders: FOLDERID_Windows, System, SystemX86, ProgramFiles,
-       ProgramFilesX86, ProgramFilesCommon, ProgramData, UserProfiles,
-       Profile, Public, Fonts, Startup, StartMenu, RoamingAppData
-       (через SHGetKnownFolderPath — не хардкод «C:\»)
-     · Корень любого тома
-     · Любой путь глубиной <= 1 от корня тома
-     · Любая точка монтирования тома
-     · System Volume Information, $Recycle.Bin (кроме операции «empty»)
-     · Пути из `keep` в конфиге
-     · Собственный каталог данных pathmemo (кроме операции `purge`)
-   Совпадение или canonical является ПРЕФИКСОМ защищённого пути → отказ.
-   Совпадение по префиксу с защищённым путём (т.е. внутри него) → отказ,
-   КРОМЕ явно разрешённых подпутей (C:\Windows\Temp, SoftwareDistribution\Download,
-   Logs, CrashDumps) — белый список внутри чёрного, задан правилами.
+3. Check canonical against ProtectedSet (canonicalised at startup):
+     · KnownFolders via SHGetKnownFolderPath, not hard-coded paths:
+       Windows, System, SystemX86, ProgramFiles(x86), ProgramFilesCommon,
+       ProgramData, UserProfiles, Profile, Public, Fonts, Startup,
+       StartMenu, RoamingAppData
+     · any volume root, any path at depth <= 1 from one, any mount point
+     · System Volume Information, $Recycle.Bin (except the "empty" operation)
+     · `keep` paths from the config
+     · pathmemo's own data directory (except `purge`)
+   A match, or canonical being a PREFIX of a protected path -> refuse.
+   Being inside a protected path -> refuse, EXCEPT for explicitly allowed
+   subpaths (C:\Windows\Temp, SoftwareDistribution\Download, Logs,
+   CrashDumps): a whitelist inside the blacklist, defined by rules.
 
-4. Проверить, что том canonical совпадает с томом, для которого запрошена операция.
+4. Check that canonical's volume is the volume the operation asked for.
 
-5. Перепроверить размер и mtime через FILE_BASIC_INFO / FILE_STANDARD_INFO
-   на ЭТОМ ЖЕ handle. Расхождение со снимком → отказ, требуется рескан.
+5. Re-read size and mtime through FILE_BASIC_INFO / FILE_STANDARD_INFO on
+   THIS handle. Disagreement with the snapshot -> refuse, rescan needed.
 
-6. Удалять по этому же handle (см. 9.5), не по пути.
+6. Delete through that same handle (§9.5), never by path.
 ```
 
-### 9.4. Карантин
+### 9.4. Quarantine
 
 ```
-%LOCALAPPDATA%\pathmemo\quarantine\
-└── op-000118\
-    ├── manifest.json        # op-id, время, режим, список (orig path → stored name), размеры, хеши
-    └── data\
-        ├── 000001\          # оригинальное дерево под числовым именем (обход лимита пути)
-        └── 000002\
+%LOCALAPPDATA%\pathmemo\quarantine\op-000118\
+├── manifest.json        # op id, time, mode, orig path -> stored name, sizes, hashes
+└── data\000001\         # original tree under a numeric name (path-length headroom)
 ```
 
-- Перемещение — `MoveFileWithProgressW` с `MOVEFILE_WRITE_THROUGH` **без** `MOVEFILE_COPY_ALLOWED`: в пределах тома это переименование, мгновенное и атомарное. Если карантин на другом томе — операция **отклоняется** (копирование 18 ГБ вместо переименования недопустимо), предлагается `Permanent` или карантин на том же томе.
-- Карантин создаётся **на каждом задействованном томе**: `D:\pathmemo-quarantine\` (скрытая системная папка) для файлов с D:.
-- `pathmemo restore op-118` возвращает всё по манифесту, проверяя, что целевые пути свободны.
-- `pathmemo purge` физически удаляет. Автоматический purge — по возрасту: карантин старше `quarantineRetentionDays` (по умолчанию 7) удаляется при старте приложения, с записью в журнал. **С предупреждением при первом запуске**, чтобы это не было сюрпризом.
-- Дашборд всегда показывает: `Quarantine: 18.2 GB in 2 operations — purge to reclaim`.
+- The move is `MoveFileWithProgressW` with `MOVEFILE_WRITE_THROUGH` and **without** `MOVEFILE_COPY_ALLOWED`: within a volume that is a rename — instant and atomic. If the quarantine is on another volume the operation is **refused** (copying 18 GB instead of renaming is not acceptable) and `Permanent`, or a same-volume quarantine, offered instead.
+- A quarantine is created **on every volume involved**: `D:\pathmemo-quarantine\` (hidden, system) for files from D:.
+- `pathmemo restore op-118` puts everything back from the manifest, checking that the target paths are free.
+- `pathmemo purge` deletes for real. Automatic purge is by age (`quarantineRetentionDays`, 7) at startup, journalled, **and announced on first run** so it is never a surprise.
+- The dashboard always shows `Quarantine: 18.2 GB in 2 operations — purge to reclaim`.
 
-### 9.5. Рекурсивное удаление без follow-the-symlink
+### 9.5. Recursive deletion without following the link
 
-Классическая уязвимость: между проверкой и удалением подкаталог подменяется на junction на `C:\Windows\System32`, и рекурсивный удалятель уходит туда.
-
-**Защита — обход по handle, а не по пути:**
+The classic vulnerability: between the check and the delete, a subdirectory is swapped for a junction to `C:\Windows\System32`, and the recursive deleter walks into it.
 
 ```
 DeleteTree(parentHandle):
-    для каждой записи в NtQueryDirectoryFile(parentHandle):
+    for each entry in NtQueryDirectoryFile(parentHandle):
         childHandle = NtCreateFile(name,
-                          RootDirectory = parentHandle,        // относительное открытие!
-                          FILE_OPEN_REPARSE_POINT)             // не следуем за точкой
-        если childHandle это reparse point:
-            удалить саму точку (FILE_DISPOSITION_INFORMATION), внутрь НЕ входить
-        иначе если каталог:
-            DeleteTree(childHandle)     // рекурсия по handle
-            удалить каталог по handle
-        иначе:
+                          RootDirectory = parentHandle,        // relative open!
+                          FILE_OPEN_REPARSE_POINT)             // never follow
+        if childHandle is a reparse point:
+            delete the point itself, do NOT enter it
+        else if directory:
+            DeleteTree(childHandle)     // recursion by handle
+            delete the directory by handle
+        else:
             SetFileInformationByHandle(childHandle, FileDispositionInfoEx,
                                        FILE_DISPOSITION_DELETE | POSIX_SEMANTICS)
 ```
 
-`RootDirectory = parentHandle` означает, что имя разрешается **относительно уже открытого каталога**. Подмена пути в середине операции физически не может перенаправить нас в другое место дерева.
+`RootDirectory = parentHandle` resolves the name **relative to an already-open directory**, so swapping a path mid-operation physically cannot redirect us elsewhere. `FILE_DISPOSITION_POSIX_SEMANTICS` (Win10 1709+) deletes a file another process holds open — the name disappears at once, the data when the last handle closes — which matters for caches inside running applications.
 
-`FILE_DISPOSITION_POSIX_SEMANTICS` (Win10 1709+) позволяет удалить файл, который открыт другим процессом (имя исчезает сразу, данные — при закрытии последнего handle). Это важно для кэшей в работающих приложениях.
+### 9.6. Recycle Bin through `IFileOperation`
 
-### 9.6. Recycle Bin через `IFileOperation`
-
-`SHFileOperation` — deprecated, глотает ошибки и возвращает «успех» при нулевом результате. Только `IFileOperation`:
+`SHFileOperation` is deprecated, swallows errors and reports success after doing nothing. `IFileOperation` only:
 
 ```csharp
 op.SetOperationFlags(FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT
                    | FOFX_RECYCLEONDELETE | FOF_WANTNUKEWARNING);
 op.SetOwnerWindow(IntPtr.Zero);
-op.Advise(new ProgressSink());   // ОБЯЗАТЕЛЬНО: иначе не узнаем, что именно не удалилось
+op.Advise(new ProgressSink());   // REQUIRED: otherwise we never learn what failed
 ```
 
-- COM требует STA → выделенный поток с `[STAThread]`-эквивалентом (`Thread.SetApartmentState`).
-- `FOF_WANTNUKEWARNING` **без** `FOF_NOCONFIRMATION` для больших файлов дал бы диалог; мы вместо этого **сами** проверяем размер против квоты корзины (`SHQueryRecycleBinW` + `MaxCapacity` из реестра) и переключаем режим на `Quarantine`, не доводя до тихого уничтожения.
-- `IFileOperationProgressSink.PostDeleteItem` даёт per-item `HRESULT` — пишем в журнал каждый элемент.
+COM needs STA, so this runs on a dedicated thread. Rather than letting `FOF_WANTNUKEWARNING` raise a dialog, we check the size against the bin's quota ourselves (`SHQueryRecycleBinW` plus the registry) and switch to `Quarantine` before silent destruction can happen. `PostDeleteItem` gives a per-item `HRESULT`, and every item is journalled.
 
-### 9.7. Журнал операций
+### 9.7. Operations journal
 
 ```
 op-000118  2026-09-17T14:22:08Z  quarantine  47 items  18.2 GB  reclaimed 0 B
@@ -950,11 +797,11 @@ op-000118  2026-09-17T14:22:08Z  quarantine  47 items  18.2 GB  reclaimed 0 B
   47 succeeded, 0 failed
 ```
 
-Каждый элемент — строка в `deletion_items`. `dry_run` операции пишутся **в отдельную таблицу** `dryrun_log`, а не в общую с флагом: смешивание реальных и пробных удалений в одном журнале делает аудит ненадёжным.
+Each item is a row in `deletion_items`. Dry runs go to a **separate table**, `dryrun_log`: mixing real and rehearsed deletions in one journal makes the audit untrustworthy.
 
-### 9.8. Замер фактического освобождения
+### 9.8. Measuring what was actually freed
 
-До операции и после (с задержкой 500 мс на завершение отложенных операций ФС) читаем `GetDiskFreeSpaceExW`:
+`GetDiskFreeSpaceExW` is read before the operation and after it (with a 500 ms delay for deferred filesystem work):
 
 ```
 Done in 1.4 s
@@ -963,19 +810,16 @@ Done in 1.4 s
 
   pathmemo purge op-118    to reclaim 18.2 GB
 ```
-и после purge:
-```
-  Predicted:  18.2 GB     Actual:  18.4 GB      C: free  21.3 GB → 39.7 GB
-```
-Расхождение > 10% логируется и показывается: это единственный способ заметить, что модель размеров врёт.
+
+and after the purge, `Predicted: 18.2 GB → Actual: 18.4 GB, C: free 21.3 → 39.7 GB`. A divergence over 10% is logged and shown: the only way to notice that the size model is lying.
 
 ---
 
-## 10. История и diff
+## 10. History and diff
 
-### 10.1. Автоматический скан по расписанию
+### 10.1. Scheduled scans
 
-**Без этого вся история мертва** — человек не будет сканировать вручную дважды в неделю.
+**Without this the history is dead** — nobody scans by hand twice a week.
 
 ```
 $ pathmemo schedule --weekly --time 03:00
@@ -985,7 +829,7 @@ Registered scheduled task "pathmemo weekly scan".
   Remove with: pathmemo schedule --off
 ```
 
-Реализация — `ITaskService` (COM) или `schtasks.exe` с `ArgumentList`. Настройки задачи: `RunOnlyIfIdle`, `DontStopOnIdleEnd = false`, `StartWhenAvailable = true`, `DisallowStartIfOnBatteries = true`, приоритет `BELOW_NORMAL`. Регистрация в контексте текущего пользователя (без пароля) — значит скан пройдёт без прав админа и в degraded-режиме; при elevated-установке предлагаем `RunLevel = Highest` для MFT-скана.
+Implemented over `ITaskService` (COM) or `schtasks.exe` with `ArgumentList`: `RunOnlyIfIdle`, `StartWhenAvailable`, `DisallowStartIfOnBatteries`, priority `BELOW_NORMAL`. Registering in the current user's context (no password) means the scan runs unelevated and degraded; when installed elevated, `RunLevel = Highest` is offered for MFT scans.
 
 ### 10.2. Diff
 
@@ -998,7 +842,6 @@ C:   +18.4 GB     2026-09-10 03:00 → 2026-09-17 03:00
     C:\Users\me\AppData\Local\Docker                       +9.8 GB   12.1 → 21.9
     C:\Users\me\projects\bigapp\node_modules               +4.2 GB   0.1 → 4.3
     C:\Program Files\Epic Games\Fortnite                   +3.9 GB
-    C:\Windows\SoftwareDistribution                        +2.8 GB
     ... 42 more
 
   SHRANK                                                   -5.7 GB
@@ -1012,27 +855,24 @@ C:   +18.4 GB     2026-09-10 03:00 → 2026-09-17 03:00
     C:\Users\me\Downloads\Win11_24H2.iso                    5.8 GB
 ```
 
-Алгоритм: оба снимка загружаются, обходятся синхронно по отсортированным именам детей (merge-join на уровне каталога), порог «интересного» изменения — `max(64 МБ, 1% размера родителя)`, глубина ограничена до первого «объясняющего» уровня (не показываем `node_modules\.bin\x`, если вырос весь `node_modules`).
+Both snapshots are loaded and walked in step over sorted child names (a merge join per directory), with depth limited to the first level that explains the change — `node_modules\.bin\x` is not shown when all of `node_modules` grew. Both snapshots must be available and neither may be `Partial`.
 
-Diff требует, чтобы **оба снимка были доступны** и оба не `Partial`.
+#### 10.2.1. Implementation notes (P4)
 
-#### 10.2.1. Как это реализовано (P4)
-
-- **Порог считается от изменения, а не от размера родителя.** 1% от корня тома на 500 ГБ — это 5 ГБ: при формулировке выше diff молчал бы обо всём, что меньше, то есть почти обо всём. Реализовано `max(64 МБ, 1% изменения этого уровня)`: на диске, который вырос на 18 ГБ, порог верхнего уровня — 180 МБ, а на диске, который сдвинулся на 200 МБ, — те же 64 МБ, и мелочь всё равно видна. Порог сужается на спуске сам, как и задумано.
-- **Строки не пересекаются, а их сумма и остаток равны изменению тома.** Если дети объясняют только часть изменения каталога, остаток выводится одной строкой `residual` для самого каталога (`C:\mix  +6.0 GB  other entries here`) — это честный способ сказать «здесь тысяча мелких файлов». Если же ни один ребёнок не прошёл порог, каталог показывается целиком (`8 GB -> 16 GB`), и спуск на этом останавливается: именно так `C:\Windows\SoftwareDistribution` попадает в отчёт одной строкой вместо 400.
-- **`UNEXPLAINED` закрывает арифметику.** Остаток меньше порога своего уровня строкой не становится — в этом и смысл порога, — поэтому `GREW + SHRANK` может не сойтись с изменением тома. Разница печатается отдельной строкой, а не остаётся загадкой: на настоящей паре сканов это было 92 МБ из 917 МБ. Читатель, который складывает два столбца и получает другое число, прав, когда перестаёт доверять инструменту.
-- **Appeared/disappeared показываются двумя способами**, в отличие от примера выше, где они только счётчики: крупные новые (или исчезнувшие) записи попадают в `GREW`/`SHRANK` с пометкой `new`/`gone` — иначе новый 10-гигабайтный каталог не имел бы в отчёте пути, — а сводка по всем, включая мелкие, остаётся отдельным блоком со счётчиком путей и крупнейшим новым файлом. Счётчик собирается там, куда отчёт спускался, то есть в каталогах, изменение которых прошло порог, и строка под ним это прямо говорит: число без границ применимости — ровно то, из-за чего дисковым инструментам не верят.
-- **Тома сопоставляются по букве**; том, который есть только в одном снимке, и несовпадение volume serial (та же буква, другая файловая система) выводятся строкой `!`.
-- **Несравнимость сканеров называется вслух.** Разные сканеры, разный elevated-статус, разная политика hardlink'ов, разный учёт ADS — четыре отдельных предупреждения перед цифрами. На настоящих снимках это видно сразу: walk без прав против MFT даёт `+1.71 ГБ C:\$MFT (new)` и `-1.6 ГБ C:\Windows\WinSxS` — не изменения диска, а разница видимости.
-- **Отказы:** нет снимка (retention оставил только цифры), снимок не читается, снимок `Partial` — каждый со своим сообщением и кодом `EX_NO_DATA`. Порядок аргументов не важен: снимки сортируются по времени, чтобы рост никогда не показался убылью.
-- **Без аргументов** — два последних снимка; с одним — он против последнего. `--limit`, `--min`, `--size`, `--json`.
-- **Цена:** загрузка двух снимков по 1.6 млн узлов — 405 мс, сам merge-join — 105 мс на настоящей паре walk/MFT (958 появившихся путей, около 60 строк роста и убыли) и 5 мс на паре, где изменился один каталог. `PATHMEMO_DIAG=1` печатает этот разбор в stderr.
+- **The threshold is a fraction of the change, not of the parent's size.** 1% of a 500 GB volume root is 5 GB, which would silence the diff about nearly everything. What is implemented is `max(64 MB, 1% of this level's change)`: on a disk that grew by 18 GB the top-level threshold is 180 MB, and on one that moved by 200 MB it is still 64 MB. The threshold narrows on the way down by itself.
+- **Rows do not overlap, and their sum plus the remainder equals the volume's change.** When children explain only part of a directory's change, the rest is one `residual` row for the directory itself (`C:\mix  +6.0 GB  other entries here`) — an honest way to say "a thousand small files here". When no child clears the threshold the directory is shown whole and the descent stops, which is how `C:\Windows\SoftwareDistribution` becomes one line instead of 400.
+- **`UNEXPLAINED` closes the arithmetic.** A remainder below its level's threshold does not become a row, so `GREW + SHRANK` need not match the volume's change. The difference is printed as its own line rather than left as a mystery: on a real pair of scans it was 92 MB out of 917 MB. A reader who adds two columns, gets a third number and stops trusting the tool is right to.
+- **Appeared and disappeared are shown two ways.** Large new (or vanished) entries appear in `GREW`/`SHRANK` tagged `new`/`gone` — otherwise a new 10 GB directory would have no path in the report — while the summary over everything stays a separate block. That count is gathered only where the report descended, and the line underneath says so: a number without its limits is exactly why disk tools are not believed.
+- **Volumes are matched by letter.** A volume present in only one snapshot, or a serial mismatch (same letter, different filesystem), is printed as a `!` row.
+- **Incomparable scanners are called out** — different scanner, elevation, hard-link policy or ADS accounting give four separate warnings ahead of the numbers. On real snapshots an unelevated walk against an MFT scan yields `+1.71 GB C:\$MFT (new)` and `-1.6 GB C:\Windows\WinSxS`, which is visibility, not disk change.
+- **Refusals:** no snapshot, an unreadable snapshot, a `Partial` snapshot — each with its own message and `EX_NO_DATA`. Argument order does not matter: snapshots are sorted by time so growth never reads as shrinkage.
+- **Without arguments** it compares the last two snapshots; with one, that one against the latest. `--limit`, `--min`, `--size`, `--json`.
+- **Cost:** 405 ms to load two 1.6M-node snapshots, 105 ms for the merge join on a real walk/MFT pair, 5 ms where one directory changed. `PATHMEMO_DIAG=1` prints the breakdown to stderr.
 
 ---
+## 11. Database schema
 
-## 11. Схема базы данных
-
-SQLite хранит **только** то, что должно быть запрашиваемым и долгоживущим. Дерево файлов — в снимках (§5).
+SQLite holds **only** what has to be queryable and long-lived. The file tree lives in snapshots (§5).
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -1040,11 +880,11 @@ PRAGMA synchronous  = NORMAL;
 PRAGMA foreign_keys = ON;
 PRAGMA temp_store   = MEMORY;
 PRAGMA busy_timeout = 5000;
-PRAGMA cache_size   = -16384;     -- 16 МБ, не 64: БД маленькая
+PRAGMA cache_size   = -16384;     -- 16 MB, not 64: the database is small
 
--- Версионирование: PRAGMA user_version, без DbUp
--- integrity_check выполняется ТОЛЬКО если предыдущий выход был некорректным
--- (маркерный файл .clean удаляется при старте, создаётся при чистом выходе)
+-- Versioned by PRAGMA user_version, no DbUp.
+-- integrity_check runs ONLY after an unclean exit (a .clean marker file is
+-- removed at startup and written on a clean shutdown).
 
 CREATE TABLE scans (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1052,7 +892,7 @@ CREATE TABLE scans (
     finished_at         TEXT,
     status              TEXT    NOT NULL,          -- running|completed|cancelled|failed
     scanner             TEXT    NOT NULL,          -- mft|walk|incremental
-    flags               INTEGER NOT NULL DEFAULT 0,-- Partial|Degraded|Elevated|...
+    flags               INTEGER NOT NULL DEFAULT 0,
     roots               TEXT    NOT NULL,          -- JSON: ["C:\\","D:\\"]
     total_files         INTEGER NOT NULL DEFAULT 0,
     total_dirs          INTEGER NOT NULL DEFAULT 0,
@@ -1061,7 +901,7 @@ CREATE TABLE scans (
     duration_ms         INTEGER,
     error_count         INTEGER NOT NULL DEFAULT 0,
     tool_version        TEXT    NOT NULL,
-    snapshot_path       TEXT,                       -- NULL если снимок удалён retention
+    snapshot_path       TEXT,                       -- NULL once retention drops it
     snapshot_bytes      INTEGER,
     note                TEXT
 );
@@ -1085,24 +925,17 @@ CREATE TABLE scan_volumes (
     PRIMARY KEY (scan_id, letter)
 );
 
--- Агрегаты для графиков за годы (переживают удаление снимка)
+-- Aggregates for multi-year graphs; they outlive the snapshot.
+-- Same shape for both: (scan_id, key, allocated_bytes, file_count).
 CREATE TABLE scan_category_totals (
-    scan_id       INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-    category      TEXT    NOT NULL,   -- media|archive|cache|source|document|app|system|other
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,   -- media|archive|cache|source|document|app|system|other
     allocated_bytes INTEGER NOT NULL,
-    file_count    INTEGER NOT NULL,
+    file_count INTEGER NOT NULL,
     PRIMARY KEY (scan_id, category)
 );
+CREATE TABLE scan_extension_totals ( /* ... extension TEXT ... */ );
 
-CREATE TABLE scan_extension_totals (
-    scan_id       INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-    extension     TEXT    NOT NULL,
-    allocated_bytes INTEGER NOT NULL,
-    file_count    INTEGER NOT NULL,
-    PRIMARY KEY (scan_id, extension)
-);
-
--- Результаты Space Audit
 CREATE TABLE audit_findings (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id       INTEGER REFERENCES scans(id) ON DELETE CASCADE,
@@ -1118,7 +951,6 @@ CREATE TABLE audit_findings (
 );
 CREATE INDEX idx_audit_scan ON audit_findings(scan_id, reclaimable_bytes DESC);
 
--- Реальные операции удаления
 CREATE TABLE delete_ops (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at        TEXT    NOT NULL,
@@ -1140,26 +972,23 @@ CREATE TABLE delete_items (
     op_id         INTEGER NOT NULL REFERENCES delete_ops(id) ON DELETE CASCADE,
     seq           INTEGER NOT NULL,
     original_path TEXT    NOT NULL,
-    stored_name   TEXT,                   -- имя внутри карантина
+    stored_name   TEXT,                   -- name inside the quarantine
     size_bytes    INTEGER NOT NULL,
-    content_hash  TEXT,                   -- для проверки при restore
+    content_hash  TEXT,                   -- checked on restore
     result        TEXT    NOT NULL,       -- ok|skipped|failed
     hresult       INTEGER,
     message       TEXT,
     PRIMARY KEY (op_id, seq)
 );
 
--- Dry-run — ОТДЕЛЬНО от реальных операций
+-- Dry runs, SEPARATE from real operations.
 CREATE TABLE dryrun_log (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ran_at      TEXT    NOT NULL,
-    source      TEXT    NOT NULL,
-    item_count  INTEGER NOT NULL,
-    total_bytes INTEGER NOT NULL,
-    detail_json TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ran_at TEXT NOT NULL,
+    source TEXT NOT NULL, item_count INTEGER NOT NULL,
+    total_bytes INTEGER NOT NULL, detail_json TEXT
 );
 
--- Кэш хешей: ключ по file id, не по пути
+-- Hash cache keyed by file id, never by path.
 CREATE TABLE file_hashes (
     volume_serial INTEGER NOT NULL,
     file_id_low   INTEGER NOT NULL,
@@ -1175,244 +1004,158 @@ CREATE TABLE file_hashes (
 CREATE INDEX idx_file_hashes_hash ON file_hashes(hash_algo, full_hash);
 CREATE INDEX idx_file_hashes_lru  ON file_hashes(last_used_at);
 
--- Найденные группы дубликатов последнего прогона (кэш, не история)
-CREATE TABLE dupe_runs (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    ran_at        TEXT    NOT NULL,
-    scan_id       INTEGER REFERENCES scans(id) ON DELETE CASCADE,
-    min_size      INTEGER NOT NULL,
-    hash_algo     TEXT    NOT NULL,
-    group_count   INTEGER NOT NULL,
-    wasted_bytes  INTEGER NOT NULL
-);
-
-CREATE TABLE dupe_groups (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id        INTEGER NOT NULL REFERENCES dupe_runs(id) ON DELETE CASCADE,
-    size_bytes    INTEGER NOT NULL,
-    file_count    INTEGER NOT NULL,
-    wasted_bytes  INTEGER NOT NULL,
-    kind          TEXT    NOT NULL,     -- duplicate|hardlink_set
-    full_hash     TEXT    NOT NULL
-);
-CREATE INDEX idx_dupe_groups ON dupe_groups(run_id, wasted_bytes DESC);
-
-CREATE TABLE dupe_files (
-    group_id      INTEGER NOT NULL REFERENCES dupe_groups(id) ON DELETE CASCADE,
-    seq           INTEGER NOT NULL,
-    path          TEXT    NOT NULL,
-    mtime_unix    INTEGER,
-    link_count    INTEGER NOT NULL DEFAULT 1,
-    suggested_keep INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (group_id, seq)
-);
+-- Duplicate groups from the last run: a cache, not history.
+--   dupe_runs   (id, ran_at, scan_id, min_size, hash_algo, group_count, wasted_bytes)
+--   dupe_groups (id, run_id, size_bytes, file_count, wasted_bytes,
+--                kind = duplicate|hardlink_set, full_hash)
+--   dupe_files  (group_id, seq, path, mtime_unix, link_count, suggested_keep)
 ```
 
-**Удалено по сравнению с v2:** `top_files`, `folder_stats` (дерево теперь в снимке), `junk_rules` / `user_exclusions` / `user_keep` (единственный источник — `config.json`), `recycle_bin_id` / `restored` в журнале (нереализуемо / заменено на `delete_ops.status`), `accessed_at` (мёртвые данные), `schema_version` (нативный `PRAGMA user_version`).
+Snapshot writing batches 20k rows for aggregates and runs `PRAGMA wal_checkpoint(PASSIVE)` after each scan operation: one transaction around a million inserts would inflate the WAL to the size of the data.
 
-**Запись снимка:** батчи по 20 тыс. строк для агрегатов, `PRAGMA wal_checkpoint(PASSIVE)` после каждой операции скана. Одна транзакция на миллион вставок раздула бы WAL до размера данных.
+### 11.1. Implementation notes (P4)
 
-### 11.1. Как это реализовано (P4)
-
-- **Схема создаётся целиком, одной версией.** `PRAGMA user_version` = 1, `Storage/Schema.sql` как embedded resource, применение в одной транзакции. Таблицы будущих фаз (`delete_ops`, `dupe_*`, `file_hashes`) создаются сразу и стоят пустыми несколько сотен байт: одна версия схемы проще, чем шесть, и P6 не начнётся с миграции.
-- **`scans.id` — это номер файла снимка.** Id выделяется до старта скана одной вставкой с `AUTOINCREMENT`, снимок пишется под полученным номером. Иначе `history` и `tree --scan 42` говорили бы о разных сканах. Вставка, а не «максимум плюс один», выбрана ради конкурентности: два pathmemo, запущенные одновременно, получают разные номера и не перетирают снимки друг друга. Удаление БД при этом ничего не ломает — снимки на диске импортируются обратно со своими номерами (4 настоящих снимка за 1.6 с), а `AUTOINCREMENT` продолжает нумерацию выше них. Если база недоступна вовсе, номер берётся из каталога снимков — единственный случай, когда нумерация не атомарна.
-- **Файл — факт, строка — индекс.** Перед чтением истории выполняется сверка: снимок без строки импортируется, строка без снимка (retention, удаление руками, обрезанный или чужой файл — проверяется заголовок) теряет `snapshot_path`, но сохраняет цифры. Так `snapshot_available = 0` из §5.4 становится наблюдаемым состоянием, а не обещанием.
-- **БД — удобство, а не условие работы.** Занятая или сломанная база не стоит потерянного скана: снимок всё равно пишется, в stderr идёт одна строка «history not updated», и до конца запуска база не трогается. `EX_LOCKED` (8) возвращают только команды, которым база обязательна (`history`, `diff`). В WAL-режиме читатель при этом не блокируется вовсе — второй процесс спокойно смотрит историю, пока первый пишет.
-- **`integrity_check` — только после грязного выхода.** Маркер `.clean` удаляется при старте и пишется при закрытии соединения; на настоящей базе проверка занимает миллисекунды и не выполняется вовсе при нормальном цикле.
-- **`--no-save` не пишет и строки.** «Проанализировать, не сохраняя» — значит не сохранять ничего, иначе экспорт в JSON из скрипта незаметно набивал бы историю.
-- **Агрегаты.** `scan_category_totals` — восемь корзин, `scan_extension_totals` — 250 самых крупных расширений плюс строка `(rest)` с остатком: на полном диске десятки тысяч уникальных суффиксов, и хранить их все означало бы, что база переживёт снимки за свой счёт. Категория наследуется от каталога (`C:\Windows` → system, `node_modules` → cache) и только потом определяется по расширению: в `C:\Windows` полно `.wav`, который не «медиа пользователя». Метафайлы NTFS в корне тома (`$MFT` на 1.7 ГБ и соседи, которые видит только MFT-сканер) — тоже system, но именно в корне: пользовательский файл имеет право называться `$draft`. Считаются один раз за скан и идут и в базу, и в блок `By category` итогового вывода, и в JSON: цифры, которые некому прочитать, — половина функции. На настоящем C: (walk, 1.22 млн файлов, 197 ГБ): system 62.5 ГБ, other 49.8, cache 34.5 (613 тыс. файлов), app 34.2, archive 12, source 2.6, media 1.7, document 0.2.
-- **`audit_findings` пишутся** при полном прогоне `audit` (не при `--id`, это разовая проверка), findings со статусом `not applicable` пропускаются: «на этой машине нет WSL» — не точка данных.
-- **Пока NULL:** `scan_volumes.metadata_bytes`, `usn_journal_id`, `next_usn` — появятся с USN-инкрементом (P9). `dryrun_log`, `delete_*`, `dupe_*`, `file_hashes` — с P6 и P8.
+- **The schema is created whole, as one version.** `user_version` = 1, `Storage/Schema.sql` as an embedded resource, applied in one transaction. Tables for later phases are created now and sit empty at a few hundred bytes: one schema version is simpler than six, and P6 will not open with a migration.
+- **`scans.id` is the snapshot's file number.** The id is allocated before the scan starts, by one `AUTOINCREMENT` insert, and the snapshot written under it — otherwise `history` and `tree --scan 42` would be talking about different scans. An insert rather than "max plus one" because of concurrency: two processes started together get different numbers. Deleting the database breaks nothing: snapshots on disk are imported back under their own numbers (4 real snapshots in 1.6 s). Only when the database is entirely unavailable does the number come from the snapshot directory — the one case where numbering is not atomic.
+- **The file is the fact; the row is an index.** Before history is read the two are reconciled: a snapshot without a row is imported, and a row without a snapshot (retention, manual deletion, a truncated or foreign file — the header is checked) loses `snapshot_path` but keeps its numbers. That makes `snapshot_available = 0` an observable state rather than a promise.
+- **The database is a convenience, not a precondition.** A locked or broken database is not worth a lost scan: the snapshot is written anyway, one line goes to stderr, and the database is left alone for the rest of the run. `EX_LOCKED` comes only from commands that require it. In WAL mode a reader is never blocked, so a second process can browse history while the first writes.
+- **`integrity_check` only after a dirty exit**, via the `.clean` marker; on a real database it takes milliseconds and never runs in a normal cycle.
+- **`--no-save` writes not one row.** Otherwise a scripted JSON export would quietly fill up the history.
+- **Aggregates.** Eight categories, plus the 250 largest extensions and a `(rest)` row — a full disk has tens of thousands of distinct suffixes. The category is inherited from the directory (`C:\Windows` → system, `node_modules` → cache) and only then taken from the extension: `C:\Windows` is full of `.wav` files that are not the user's media. NTFS metafiles at a volume root are system too, but only at the root — a user file is entitled to be called `$draft`. Computed once per scan and sent to the database, the `By category` block and the JSON alike. On a real C: (walk, 1.22M files, 197 GB): system 62.5 GB, other 49.8, cache 34.5 (613k files), app 34.2, archive 12, source 2.6, media 1.7, document 0.2.
+- **Still NULL:** `metadata_bytes`, `usn_journal_id`, `next_usn` arrive with P9; `dryrun_log`, `delete_*`, `dupe_*`, `file_hashes` with P6 and P8.
 
 ---
 
-## 12. Конфигурация
+## 12. Configuration
 
-`%LOCALAPPDATA%\pathmemo\config.json`. Все ключи — camelCase, все размеры принимают человекочитаемый вид (`"1GB"`, `"512MB"`, `1048576`), все длительности — `"30d"`, `"12h"`.
+`%LOCALAPPDATA%\pathmemo\config.json`. Keys are camelCase, sizes accept a human form (`"1GB"`, `1048576`), durations look like `"30d"`.
 
 ```json
 {
-  "$schema": "https://pathmemo.dev/schema/config-1.json",
-
   "scan": {
-    "preferMftScanner": true,
-    "promptForElevation": true,
-    "parallelism": "auto",
-    "excludeFromScan": [],
-    "doNotRecurse": ["\\\\*"],
-    "includeCloudOnlyFiles": true,
-    "progressIntervalMs": 250,
-    "useUsnIncremental": true
+    "preferMftScanner": true, "promptForElevation": true, "parallelism": "auto",
+    "excludeFromScan": [], "doNotRecurse": ["\\\\*"], "includeCloudOnlyFiles": true,
+    "progressIntervalMs": 250, "useUsnIncremental": true
   },
-
   "protect": {
     "keep": [],
     "allowInsideProtected": [
-      "%WINDIR%\\Temp\\**",
-      "%WINDIR%\\SoftwareDistribution\\Download\\**",
-      "%WINDIR%\\Logs\\**",
-      "%WINDIR%\\Prefetch\\**"
+      "%WINDIR%\\Temp\\**", "%WINDIR%\\SoftwareDistribution\\Download\\**",
+      "%WINDIR%\\Logs\\**", "%WINDIR%\\Prefetch\\**"
     ]
   },
-
   "delete": {
-    "defaultMode": "quarantine",
-    "recycleMaxItems": 100,
-    "recycleMaxBytes": "500MB",
-    "quarantineRetentionDays": 7,
-    "autoPurgeExpired": true,
-    "requireTypedConfirmationOverBytes": "1GB",
-    "verifyBeforeDelete": true
+    "defaultMode": "quarantine", "recycleMaxItems": 100, "recycleMaxBytes": "500MB",
+    "quarantineRetentionDays": 7, "autoPurgeExpired": true,
+    "requireTypedConfirmationOverBytes": "1GB", "verifyBeforeDelete": true
   },
-
   "duplicates": {
-    "minSize": "1MB",
-    "hashAlgorithm": "xxh128",
-    "bufferSize": "1MB",
-    "partialHashBytes": "64KB",
-    "byteForByteVerify": true,
-    "crossVolume": true,
-    "skipCloudOnly": true,
-    "hashCacheMaxEntries": 200000
+    "minSize": "1MB", "hashAlgorithm": "xxh128", "bufferSize": "1MB",
+    "partialHashBytes": "64KB", "byteForByteVerify": true, "crossVolume": true,
+    "skipCloudOnly": true, "hashCacheMaxEntries": 200000
   },
-
-  "rules": {
-    "disabled": [],
-    "custom": []
-  },
-
+  "rules": { "disabled": [], "custom": [] },
   "storage": {
-    "dataDirectory": "%LOCALAPPDATA%\\pathmemo",
-    "keepRecentSnapshots": 20,
-    "keepMonthlySnapshots": 12,
-    "snapshotsMaxBytes": "400MB"
+    "dataDirectory": "%LOCALAPPDATA%\\pathmemo", "keepRecentSnapshots": 20,
+    "keepMonthlySnapshots": 12, "snapshotsMaxBytes": "400MB"
   },
-
-  "logging": {
-    "level": "Information",
-    "retentionDays": 14,
-    "logFilePaths": false
-  },
-
-  "ui": {
-    "sizeMode": "unique",
-    "minWidth": 80,
-    "minHeight": 24,
-    "mouse": true,
-    "confirmOpenExecutables": true
-  },
-
-  "export": {
-    "redactPaths": false
-  }
+  "logging": { "level": "Information", "retentionDays": 14, "logFilePaths": false },
+  "ui": { "sizeMode": "unique", "minWidth": 80, "minHeight": 24, "mouse": true,
+          "confirmOpenExecutables": true },
+  "export": { "redactPaths": false }
 }
 ```
 
-### 12.1. Elevated-режим игнорирует пользовательский конфиг для путей
+### 12.1. Elevated mode ignores user config for paths
 
-**Уязвимость v2:** конфиг лежит в `%LOCALAPPDATA%` (пишется обычным пользователем), а для MFT-скана процесс запускается от админа. Значит `logging.filePath` и `database.path` из конфига дали бы **произвольную запись файла от имени администратора** — локальное повышение привилегий.
+The config lives in `%LOCALAPPDATA%`, writable by an ordinary user, while an MFT scan runs as administrator. A `logging.filePath` or `database.path` taken from that config would be **arbitrary file write as administrator** — a local privilege escalation. So whenever `IsProcessElevated()`:
 
-**Правило:** при `IsProcessElevated()`:
-- `storage.dataDirectory` и путь логов **не берутся из конфига**, только из фиксированного `%LOCALAPPDATA%` вызывающего пользователя (через `WTSQueryUserToken`/`SHGetKnownFolderPath` с токеном сессии);
-- проверяется DACL файла конфига: если на него есть write у групп шире `Administrators`/`SYSTEM`/владельца — выводится предупреждение, а `rules.custom`, `protect.*` и всё, что влияет на удаление, **игнорируется**, работают только дефолты и CLI-аргументы;
-- **никогда** не поддерживается конструкция вида «выполнить команду после очистки». Такого ключа нет и не будет.
+- `storage.dataDirectory` and the log path **do not come from the config**, only from the calling user's fixed `%LOCALAPPDATA%` (via `WTSQueryUserToken` / `SHGetKnownFolderPath` with the session token);
+- the config file's DACL is checked: if anything wider than `Administrators` / `SYSTEM` / the owner can write it, a warning is printed and `rules.custom`, `protect.*` and everything else affecting deletion is **ignored**;
+- **there is no "run a command after cleanup" key**, and there never will be.
 
-*Реализовано в P4:* то же правило распространено на `--data-dir` — единственный способ переопределить каталог данных, который сейчас существует. При elevated опция печатает предупреждение и игнорируется: аргумент командной строки от админа — такой же примитив произвольной записи, как ключ конфига. `config.json` пока не читается вовсе.
+*Implemented in P4:* the same rule covers `--data-dir`, the only override that currently exists. When elevated it prints a warning and is ignored: a command-line argument from an administrator is the same arbitrary-write primitive as a config key. `config.json` is not read at all yet.
 
-### 12.2. Глобы, а не regex
+### 12.2. Globs, not regex
 
-v2 смешивала два синтаксиса в одном документе (`**\node_modules` рядом с `.*\\\\Temp$`). Выбран **один**: глобы.
+One syntax, not two. Matching is `FileSystemName.MatchesSimpleExpression` (built in, zero allocations) extended with `**` for "any number of segments". Variables (`%WINDIR%`, `%TEMP%`, `%APPDATA%`, `%LOCALAPPDATA%`, `%USERPROFILE%`, `%ProgramData%`, `%ProgramFiles%`, `~`) expand through `SHGetKnownFolderPath`, never a hard-coded `C:\`. Matching runs against **canonicalised** paths.
 
-- Матчинг — `FileSystemName.MatchesSimpleExpression` (встроенный, аллокаций 0) с расширением для `**` (любое число сегментов).
-- Раскрываются переменные: `%WINDIR%`, `%TEMP%`, `%APPDATA%`, `%LOCALAPPDATA%`, `%USERPROFILE%`, `%ProgramData%`, `%ProgramFiles%`, `~` — через `SHGetKnownFolderPath`, не через хардкод `C:\`.
-- Матчинг по **канонизированным** путям (нижний регистр инвариантный, разрешённые reparse points).
-- Regex доступен как опт-ин: `{ "regex": "..." }` вместо `"pattern"`, **обязательно** с `RegexOptions.NonBacktracking | CultureInvariant` и `matchTimeout = 50 ms`. Без `NonBacktracking` один плохой паттерн вешал бы скан миллиона путей катастрофическим бэктрекингом (ReDoS).
-- Правило матчится **только по имени и суффиксу пути**, не по всему пути целиком, где это возможно — быстрый префильтр по последнему сегменту через хеш-сет даёт O(1) отсев 99% узлов.
+Regex is opt-in as `{ "regex": "..." }`, **mandatorily** with `RegexOptions.NonBacktracking | CultureInvariant` and `matchTimeout = 50 ms`: without `NonBacktracking` one bad pattern would hang a million-path scan on catastrophic backtracking. Where possible a rule matches on the name and path suffix rather than the whole path — a hash-set prefilter on the last segment rejects 99% of nodes in O(1).
 
 ---
 
 ## 13. CLI
 
-Все команды, весь вывод — английский. Читаемый вывод по умолчанию, `--json` для скриптов.
+Readable output by default, `--json` for scripts.
 
 ```
-pathmemo                                   TUI (если TTY), иначе `status`
+pathmemo                                   TUI when attached to a TTY, else `status`
 
-pathmemo scan [<path>...] [options]        скан; без пути — все локальные фиксированные тома
-pathmemo status                            сводка последнего скана + свободное место
-pathmemo tree [<path>] [--scan <id>]       дерево, крупнейшее сверху (неинтерактивно)
-pathmemo top [options]                     крупнейшие файлы/папки с фильтрами
+pathmemo scan [<path>...] [options]        scan; no path means every fixed volume
+pathmemo status                            last scan plus free space
+pathmemo tree [<path>] [--scan <id>]       tree, largest first, non-interactive
+pathmemo top [options]                     largest files and folders, with filters
 pathmemo audit [--id <finding>] [--apply <finding>]
-pathmemo reclaim [options]                 рекомендации по очистке
-pathmemo dupes [options]                   поиск дубликатов
-pathmemo rm <path>... [options]            удаление (карантин по умолчанию)
-pathmemo restore <op-id>                   восстановление из карантина
-pathmemo purge [<op-id>|--expired|--all]   физическое удаление карантина
-pathmemo ops [--limit N]                   журнал операций удаления
+pathmemo reclaim [options]                 cleanup recommendations
+pathmemo dupes [options]                   duplicate search
+pathmemo rm <path>... [options]            deletion (quarantine by default)
+pathmemo restore <op-id>                   restore from quarantine
+pathmemo purge [<op-id>|--expired|--all]   delete the quarantine for real
+pathmemo ops [--limit N]                   deletion journal
 pathmemo history [--limit N] [--since <date>]
 pathmemo diff <id-a> <id-b>
 pathmemo errors <scan-id>
 pathmemo export <scan-id> --format json|csv --output <file> [--redact]
 pathmemo schedule [--weekly|--daily] [--time HH:MM] | --off | --status
 pathmemo config [--path | --edit | --reset]
-pathmemo doctor                            диагностика: права, USN, ФС, БД, версия
+pathmemo doctor                            rights, USN, filesystem, database, version
 ```
 
-### 13.1. Общие опции
+### 13.1. Common options
 
 ```
---json                  стабильный машиночитаемый вывод в stdout, логи в stderr
---quiet                 только ошибки
---no-color              отключить ANSI (также уважается NO_COLOR и не-TTY)
---size logical|allocated|unique      режим отображения размеров (default: unique)
---yes                   не спрашивать подтверждений (НЕ действует на permanent delete
-                        и на Risk=Danger — они всегда требуют --force и типизированного
-                        подтверждения либо --confirm-token)
---data-dir <path>       альтернативный каталог данных (игнорируется при elevated)
+--json                  stable machine-readable stdout, logs to stderr
+--quiet                 errors only
+--no-color              no ANSI (NO_COLOR and a non-TTY are honoured too)
+--size logical|allocated|unique      default: unique
+--yes                   skip confirmations (NOT for permanent delete or Risk=Danger,
+                        which always need --force plus a typed confirmation)
+--data-dir <path>       alternative data directory (ignored when elevated)
 --verbose / -v
 ```
 
-*Реализовано в P4:* `--data-dir` — снимается из аргументов до разбора команды, поэтому работает с любой из них; при elevated печатает предупреждение и игнорируется (§12.1). `--json` есть у `scan`, `diff`, `history` и `audit`. `--size` — у `tree`, `top`, `diff`. Остальное — по мере фаз.
+*P4:* `--data-dir` is stripped from the arguments before the command is parsed, so it works with any of them, and when elevated it warns and is ignored (§12.1). `--json` exists on `scan`, `diff`, `history` and `audit`; `--size` on `tree`, `top` and `diff`.
 
-*Реализовано в P5:* `status` — те же данные, что на экране Overview, но текстом: тома со свободным местом и unaccounted, последний скан, размер хранилища. Это же печатается, когда `pathmemo` запускают без аргументов с перенаправленным stdout (§14.5). `--no-color` пока не разбирается как опция, но `NO_COLOR` в окружении уважается: TUI рисуется без палитры, инверсия выделенной строки остаётся.
+*P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `--no-color` is not parsed as an option yet, but `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
 
 ### 13.2. `scan`
 
 ```
 pathmemo scan [<path>...]
-  --all-volumes             все локальные фиксированные тома
+  --all-volumes             every local fixed volume
   --scanner mft|walk|auto   default: auto
-  --no-elevate              не предлагать релонч, сразу degraded
-  --full                    игнорировать USN и сканировать с нуля
-  --exclude <glob>          можно несколько; только для ЭТОГО скана
-  --parallelism <n|auto>
-  --note <text>
-  --no-audit                не запускать Space Audit после скана
-  --format console|json|csv
-  --output <file>
+  --no-elevate              no relaunch prompt, go degraded immediately
+  --full                    ignore USN, scan from scratch
+  --exclude <glob>          repeatable; this scan only
+  --parallelism <n|auto>    --note <text>    --no-audit
+  --format console|json|csv --output <file>
 ```
 
-*Реализовано в P3:* `--scanner mft|walk` (без значения — auto), `--no-elevate`, `--parallelism`, `--note`, `--top`, `--no-save`, `--quiet`; добавлен `--pause` — его подставляет сам инструмент при перезапуске с правами, чтобы новое окно консоли не закрылось до того, как пользователь увидит итог.
+*P3:* `--scanner`, `--no-elevate`, `--parallelism`, `--note`, `--top`, `--no-save`, `--quiet`, plus `--pause`, which the tool passes to itself when relaunching elevated so the new console window does not close before the user has seen the result.
 
-*Реализовано в P4:* `--format console|json|csv` и `--output <file>`; `--json` — синоним `--format json`. JSON содержит `schemaVersion`, метаданные скана, тома со сверкой, категории, топы и список `limitations` — машиночитаемую версию того же предупреждения о точности, которое печатает консоль. CSV — таблица крупнейших записей по `--top` (полный экспорт дерева — это `export`, отдельная команда). При не-консольном формате прогресс не печатается, а подтверждение записи файла идёт в stderr: в stdout только данные (§13.6). Консольный итог получил блок `By category` — те же восемь корзин, что уходят в базу. Остальное — по мере фаз (`--full` в P9, `--exclude` в P7, `--no-audit` вместе с автозапуском audit).
+*P4:* `--format` and `--output`; `--json` is a synonym for `--format json`. The JSON carries `schemaVersion`, scan metadata, volumes with reconciliation, categories, tops and a `limitations` list — the machine-readable version of the accuracy warning the console prints. CSV is a table of the largest entries per `--top`. In a non-console format no progress is printed and the write confirmation goes to stderr: stdout carries data only (§13.6).
 
 ### 13.3. `top`
 
-Основной «полу-CLI» сценарий — быстро найти жирное с фильтрами.
+The main semi-CLI scenario: find the fat things, with filters.
 
 ```
 pathmemo top
-  --scan <id>            default: последний
-  --files | --dirs       default: --files
-  --limit <n>            default: 40
-  --under <path>         только внутри пути
-  --min <size>           например 1GB
-  --ext <a,b,c>          iso,vhdx,zip
-  --older-than <dur>     180d
-  --newer-than <dur>
-  --category <c>
-  --sort size|mtime|count
-  --paths-only           один путь на строку — для пайпа
+  --scan <id>       default: the latest      --files | --dirs   default: --files
+  --limit <n>       default: 40              --under <path>
+  --min <size>      e.g. 1GB                 --ext iso,vhdx,zip
+  --older-than 180d / --newer-than <dur>     --category <c>
+  --sort size|mtime|count                    --paths-only   one path per line, for a pipe
 ```
 
 ```
@@ -1431,61 +1174,55 @@ $ pathmemo top --min 1GB --ext iso,vhdx --older-than 90d
 
 ```
 pathmemo rm <path>...
-  --mode quarantine|recycle|permanent     default: из конфига
-  --dry-run
-  --reason <text>
-  --from-stdin                            пути с stdin, по одному на строку
-  --scan <id>                             сверять размеры со снимком
-  --force                                 требуется для Risk>=Caution
-  --confirm-token <token>                 неинтерактивная замена типизированного
-                                          подтверждения; токен печатается в dry-run
+  --mode quarantine|recycle|permanent     default: from the config
+  --dry-run          --reason <text>      --from-stdin     --scan <id>
+  --force                                 required for Risk >= Caution
+  --confirm-token <token>                 non-interactive stand-in for the typed
+                                          confirmation; printed by --dry-run
 ```
 
-`--confirm-token` — решение проблемы «как автоматизировать опасную операцию, не делая `--yes` универсальной отмычкой»: dry-run печатает токен, зависящий от точного списка путей и размеров; если что-то изменилось — токен невалиден.
+`--confirm-token` answers "how do you automate a dangerous operation without making `--yes` a skeleton key": the dry run prints a token derived from the exact list of paths and sizes, and if anything changed the token is invalid.
 
-### 13.5. Exit-коды
+### 13.5. Exit codes
 
-| Код | Константа | Смысл |
+| Code | Constant | Meaning |
 |---|---|---|
-| 0 | `EX_OK` | успех |
-| 1 | `EX_FAILURE` | общая ошибка |
-| 2 | `EX_USAGE` | неверные аргументы |
-| 3 | `EX_PARTIAL` | выполнено частично (часть путей недоступна) |
-| 4 | `EX_CANCELLED` | отменено пользователем |
-| 5 | `EX_NEEDS_ELEVATION` | требуются права администратора |
-| 6 | `EX_UNSAFE` | операция отклонена защитой (protected path, последняя копия, verify failed) |
-| 7 | `EX_NO_DATA` | нет снимка/скана для запроса |
-| 8 | `EX_LOCKED` | БД занята другим процессом — возвращают только команды, которым БД обязательна (`history`, `diff`); скан при занятой БД сохраняет снимок и предупреждает (§11.1) |
+| 0 | `EX_OK` | success |
+| 1 | `EX_FAILURE` | general failure |
+| 2 | `EX_USAGE` | bad arguments |
+| 3 | `EX_PARTIAL` | partially done (some paths unreachable) |
+| 4 | `EX_CANCELLED` | cancelled by the user |
+| 5 | `EX_NEEDS_ELEVATION` | administrator rights required |
+| 6 | `EX_UNSAFE` | refused by a guard (protected path, last copy, verify failed) |
+| 7 | `EX_NO_DATA` | no snapshot or scan for the query |
+| 8 | `EX_LOCKED` | database held by another process; only from commands that require it (§11.1) |
 
-### 13.6. Стабильность JSON
+### 13.6. JSON stability
 
-`--json` выводит объект с полем `"schemaVersion": 1`. Поля только добавляются в рамках мажорной версии. Всё, что не является данными (прогресс, предупреждения), идёт в stderr. Числа — байты в виде целых, не строк. Времена — ISO-8601 UTC с `Z`.
+`--json` emits an object with `"schemaVersion": 1`. Fields are only ever added within a major version. Anything that is not data goes to stderr. Numbers are bytes as integers, not strings; times are ISO-8601 UTC with `Z`.
 
-*Реализовано в P4:* контракт закреплён тестами на `scan --format json` (версия схемы, байты числами, время с `Z`, `limitations`) и на CSV-кавычки. Писатель — `Utf8JsonWriter` вручную, без сериализатора: рефлексия — это то, из-за чего trimmed-сборка падает в рантайме, а не на билде (§18).
+*P4:* the contract is pinned by tests on `scan --format json` and on CSV quoting. The writer is a hand-written `Utf8JsonWriter` with no serializer: reflection is what makes a trimmed build fail at runtime instead of at build time (§18).
 
 ---
-
 ## 14. TUI
 
-### 14.1. Пять экранов вместо одиннадцати
+### 14.1. Five screens, not eleven
 
-v2 описывала 11 экранов — это месяцы работы и размазанная ценность. Оставлены те, что несут её:
-
-| # | Экран | Зачем |
+| # | Screen | Why |
 |---|---|---|
-| 1 | **Overview** | Тома, свободно/занято, unaccounted, карантин, последний скан, ссылки на остальное |
-| 2 | **Tree** | **Главный экран.** Навигация по дереву сверху вниз, как `ncdu`. 80% ценности продукта. |
-| 3 | **Audit** | Findings из §6 с командами устранения |
-| 4 | **Reclaim** | Рекомендации §7, группировка по правилу, массовое выделение |
-| 5 | **Duplicates** | Группы, выбор оригинала |
+| 1 | **Overview** | Volumes, free/used, unaccounted, quarantine, last scan, links to the rest |
+| 2 | **Tree** | **The main screen.** Top-down navigation, like `ncdu`. 80% of the product's value. |
+| 3 | **Audit** | Findings from §6 with their remedies |
+| 4 | **Reclaim** | Recommendations from §7, grouped by rule, bulk selection |
+| 5 | **Duplicates** | Groups, choosing the original |
 
-Переключение — `1`…`5`. Модальные: `Details`, `Confirm delete`, `Search`, `Help`, `Sort`.
+`1`…`5` switch. Modals: `Details`, `Confirm delete`, `Search`, `Help`, `Sort`.
 
-*Реализовано в P5:* экраны 1 и 2 и модальные `Details`, `Search`, `Help`, `Sort`, плюс общий `Confirm` (пока его единственный потребитель — открытие файла, но он же обслужит удаление в P6). Клавиша `3` открывает построчный экран audit из P2 — тот же вывод, что у `pathmemo audit`, показанный в обычной консоли; `4` и `5` честно говорят, в какой фазе появятся. Диалог подтверждения удаления и сам экран Reclaim — P6 и P7.
+*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm` (its only consumer so far is opening a file, but it will serve deletion in P6). `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in.
 
-Экраны **Settings** (редактор JSON в терминале — дни работы, нулевая ценность; вместо него `c` = открыть конфиг во внешнем редакторе + `F5` перечитать), **Errors** (счётчик на Overview + `pathmemo errors` в CLI), **History/Diff** (в CLI; на Overview — спарклайн занятого места) в TUI не выносятся.
+**Settings** is not a screen (a JSON editor in a terminal is days of work for nothing; `c` opens the config in an external editor and `F5` reloads), nor is **Errors** (a counter on Overview plus `pathmemo errors`), nor **History/Diff** (CLI, with a sparkline on Overview).
 
-### 14.2. Главный экран — Tree
+### 14.2. The main screen — Tree
 
 ```
  pathmemo   C:\Users\me\AppData\Local                      unique  ·  scan 43  ·  03:00
@@ -1496,7 +1233,6 @@ v2 описывала 11 экранов — это месяцы работы и 
    21.9 GB  ██████████░░░░░░░░░░░░░░░░  26.0%  Docker/                       8,102
     6.2 GB  ███░░░░░░░░░░░░░░░░░░░░░░░   7.4%  Temp/                        41,209
     4.1 GB  ██░░░░░░░░░░░░░░░░░░░░░░░░   4.9%  Google/                      19,884
-    2.8 GB  █░░░░░░░░░░░░░░░░░░░░░░░░░   3.3%  Programs/                     4,102
     1.9 GB  ░░░░░░░░░░░░░░░░░░░░░░░░░░   2.3%  npm-cache/          redownload 9,441
     1.2 GB  ░░░░░░░░░░░░░░░░░░░░░░░░░░   1.4%  CrashDumps/              safe     14
 ▸ 940.2 MB  ░░░░░░░░░░░░░░░░░░░░░░░░░░   1.1%  NVIDIA/                  safe  2,014
@@ -1505,16 +1241,13 @@ v2 описывала 11 экранов — это месяцы работы и 
  j/k move  l/Enter in  h out  y copy  e explorer  x mark  d delete  / search  ? help
 ```
 
-- Бар и процент — от размера текущего каталога.
-- Бейджи справа: правило reclaim (`safe`, `redownload`), `link` (hardlink alias), `sparse`, `cloud`, `reparse`.
-- Каталоги и файлы в одном списке, отсортированы по размеру. `Tab` — только каталоги / только файлы / всё.
-- Виртуализация обязательна: рендерим только видимые строки; каталог с 200 тыс. детей не должен тормозить.
+The bar and percentage are relative to the current directory. Badges on the right: the reclaim rule (`safe`, `redownload`), `link` (hard-link alias), `sparse`, `cloud`, `reparse`. Directories and files share one list sorted by size. Virtualisation is mandatory — only visible rows are rendered, and a directory with 200k children must not stutter.
 
-*Реализовано в P5:* всё перечисленное, кроме бейджей reclaim — они появятся с правилами в P7; сейчас показываются `link`, `sparse`, `cloud`, `reparse`, `self` и `partial` (каталог, который не удалось дочитать). Переключение «каталоги / файлы / всё» повешено на `t`, а не на `Tab`: `Tab` в терминале — это переход фокуса, и хост его перехватывает. Ширина колонки бейджей считается по видимым строкам: там, где ссылок и sparse нет, все колонки достаются именам.
+*Implemented in P5:* all of the above except the reclaim badges, which arrive with the rules in P7; `link`, `sparse`, `cloud`, `reparse`, `self` and `partial` are shown. The dirs/files/all filter is on `t`, not `Tab`: `Tab` moves focus in a terminal and the host takes it. The badge column is sized from the visible rows, so where there are no links or sparse files every column goes to names.
 
-### 14.3. Горячие клавиши
+### 14.3. Key map
 
-Раскладка в духе `ncdu` / `lazygit`: **одиночные символы**, работают везде.
+In the spirit of `ncdu` and `lazygit`: **single characters**, working everywhere.
 
 ```
 NAVIGATION                       ACTIONS
@@ -1539,639 +1272,478 @@ VIEW                               K      add to keep-list
   Ctrl+C       cancel / quit  (standard behaviour, NOT hijacked)
 ```
 
-**Что исправлено относительно v2:**
+Bindings that were rejected: `Ctrl+C` for "copy path" — it is SIGINT, so a user with a hung network scan could not get out, and Windows Terminal intercepts it when there is a selection (`y` copies instead, like vim's yank); `Ctrl+Shift+C` — **intercepted by the terminal** in Windows Terminal, VS Code and ConEmu (`Y`); `Ctrl+1..6` for sorting — a digit with Ctrl has no VT sequence and cmd.exe does not deliver it (`s` opens a menu); `Ctrl+/` — delivered as `0x1F` only sometimes (`?`); `Ctrl+D` for delete — it is EOF and "page down" in most TUIs, a dangerous binding for a destructive act (`d` plus a dialog); `F10` to quit — conhost takes it as a menu, and tmux takes F-keys (`Q`).
 
-| v2 | Проблема | v3 |
-|---|---|---|
-| `Ctrl+C` = «копировать путь» | В терминале это SIGINT. Пользователь с зависшим сканом сетевого диска не сможет выйти. Плюс Windows Terminal сам перехватывает `Ctrl+C` при наличии выделения — событие до приложения не дойдёт. | `y` = copy (как `yank` в vim). `Ctrl+C` = стандартная отмена/выход. |
-| `Ctrl+Shift+C` | **Перехватывается терминалом** (Windows Terminal, VS Code, ConEmu). Приложение не получит событие никогда. | `Y` |
-| `Ctrl+1..6` = сортировка | `Ctrl`+цифра не имеет VT-последовательности, в cmd.exe не передаётся. | `s` → меню сортировки |
-| `Ctrl+/` | Передаётся как `0x1F` не везде, в cmd.exe отсутствует. | `?` |
-| `Ctrl+D` = удалить | `Ctrl+D` — это EOF и «page down» в большинстве TUI. Опасный биндинг для деструктивной операции. | `d` + обязательный диалог; `Ctrl+D` = page down |
-| `F10` = выход | Перехватывается conhost как меню; в tmux/screen F-клавиши уходят мультиплексору. | `Q`; F-клавиши только как дублёры |
+### 14.4. Rendering untrusted names
 
-### 14.4. Отрисовка недоверенных имён
+File names are **input from an untrusted source**. Before drawing:
 
-Имена файлов — **вход от недоверенного источника**. Перед отрисовкой:
+1. **Bidi overrides are stripped** (`U+202A..U+202E`, `U+2066..U+2069`, `U+200E/200F`). Otherwise `annexe[U+202E]txt.exe` displays as `annexe.txt` — classic spoofing, shown to a user with an "open" key right there.
+2. **Control characters** become `·`. WSL and Samba create such names and they wreck ANSI layout.
+3. **Width is East Asian Width plus emoji**, not `string.Length`: CJK and emoji take two columns, and without this the table falls apart on the first Chinese file name.
+4. **Truncation in the middle**: `C:\Users\me\…\node_modules\.bin` beats `C:\Users\me\projects\bigap…`.
+5. **Zero-width characters** are removed.
 
-1. **Bidi-override вырезается:** `U+202A..U+202E`, `U+2066..U+2069`, `U+200E/200F`. Иначе файл `annexe[U+202E]txt.exe` отображается как `annexe.txt` — классический спуфинг, а мы бы показывали его пользователю, у которого рядом клавиша «открыть».
-2. **Control-символы** `U+0000..U+001F`, `U+007F` → `·`. WSL и Samba создают такие имена, и они ломают вёрстку ANSI.
-3. **Ширина считается по East Asian Width + Emoji**, не по `string.Length`: CJK и эмодзи занимают 2 колонки. Без этого таблица разъезжается на первом же китайском имени файла или названии с эмодзи.
-4. **Сокращение по середине**, а не по концу: `C:\Users\me\…\node_modules\.bin` информативнее, чем `C:\Users\me\projects\bigap…`.
-5. **Zero-width** (`U+200B..U+200D`, `U+FEFF`) вырезается.
+*Implemented in P5:* `Sanitizer` (1, 2, 5) and `TextWidth` (3) are pure functions with unit tests, including that `annexe\u202Etxt.exe`. Width comes from a binary-searched table of East Asian Width W/F ranges plus emoji blocks; combining marks and `U+FE0F` are zero. ZWJ sequences are measured per part: whether the terminal ligates them cannot be known from here — Windows Terminal does, conhost does not — and choosing conhost keeps alignment where it breaks more visibly. The sanitised name goes to the screen; the real one to the clipboard and Explorer.
 
-*Реализовано в P5:* `Sanitizer` (пункты 1, 2, 5) и `TextWidth` (пункт 3) — чистые функции над строками, проверенные юнитами, включая тот самый `annexe\u202Etxt.exe`. Ширина считается по таблице диапазонов East Asian Width W/F плюс эмодзи-блоки, с бинарным поиском; комбинирующие знаки и `U+FE0F` дают ноль. ZWJ-последовательности (эмодзи-семья) меряются по частям: ligature'ит ли их терминал, отсюда не узнать — Windows Terminal да, conhost нет, и выбор в пользу conhost сохраняет выравнивание там, где оно ломается заметнее. На экран уходит санитизированное имя, в буфер обмена и в Проводник — настоящее.
+### 14.5. Terminal size and resizing
 
-### 14.5. Размер терминала и ресайз
+Minimum **80×24** (80 columns is the default of half the windows out there). Under 100 columns the bar and file counter disappear, leaving size, percentage and name. The `SIGWINCH` equivalent (polling the width every 200 ms) triggers a redraw. With output redirected the TUI does not start at all, and a bare `pathmemo` behaves as `pathmemo status`.
 
-- Минимум **80×24** (не 100×30 из v2 — 80 колонок это дефолт половины окон).
-- Колонки адаптивные: при < 100 колонок скрываются бар и счётчик файлов, остаётся размер + процент + имя.
-- `SIGWINCH`-эквивалент (`Console.WindowWidth` polling раз в 200 мс или `ReadConsoleInput` `WINDOW_BUFFER_SIZE_EVENT`) → перерисовка.
-- При выводе в не-TTY (`Console.IsOutputRedirected`) TUI не запускается вообще; `pathmemo` без аргументов работает как `pathmemo status`.
+### 14.6. Logs and the TUI
 
-### 14.6. Логи и TUI
+Logs go **to a file only**, never to stdout or stderr while the TUI is up. With `--json`, data goes to stdout, diagnostics to stderr, and the TUI is off.
 
-Логи **только в файл**, никогда в stdout/stderr при активном TUI. При `--json` — данные в stdout, диагностика в stderr, TUI отключён.
+### 14.7. Implementation notes (P5)
 
-### 14.7. Как это реализовано (P5)
+**The renderer is a frame buffer with row-level diffing.** `Screen` keeps two copies of the frame and sends only the rows that changed. Redrawing everything on each keystroke means flicker in conhost and unusability over SSH. Diffing by row rather than by cell: per-cell rendering needs an attribute buffer and run coalescing, for a gain nobody sees across 24 rows.
 
-**Рендерер — кадровый буфер со строчным diff'ом.** `Screen` держит две копии кадра и отправляет в терминал только изменившиеся строки: `ESC[y;1H`, очистка строки, содержимое. Перерисовка всего экрана на каждое нажатие — это мерцание в conhost и неработоспособность через SSH. Диффом по строкам, а не по ячейкам: побайтовый рендер требует буфера атрибутов и склейки прогонов ради выигрыша, которого на 24 строках никто не увидит.
+**"Erase first, then write" is not cosmetic.** The first version wrote the row and appended `ESC[K`; on a live terminal every row filled to the right edge lost its last character. Writing into the final column leaves the cursor there in the pending-wrap state, and an erase-to-end-of-line then wipes the cell just written. Found in a screenshot of a real window (`937,09` instead of `937,094`), closed by a test on the exact byte sequence.
 
-**Порядок «сначала стереть, потом писать» — не косметика.** Первая версия писала строку и добавляла `ESC[K` после неё; на живом терминале у каждой строки, заполненной до правого края, пропадал последний символ. Причина: после записи в последнюю колонку курсор остаётся на ней в состоянии отложенного переноса, и очистка до конца строки стирает только что написанную ячейку. Найдено скриншотом настоящего окна (`937,09` вместо `937,094`), закрыто тестом на точную последовательность.
+`Line` truncates by **columns**, not characters, so no caller can skew a table. The selected row is drawn with reverse video: reverse is not colour, so it survives `NO_COLOR`, which disables only the palette.
 
-`Line` — строитель строки, который обрезает по **колонкам**, а не по символам, поэтому ни один вызывающий код не может разъехать таблицу. Выделенная строка рисуется инверсией (`ESC[7m`) на всю ширину: инверсия — не цвет, поэтому она работает и при `NO_COLOR`, который отключает только палитру.
+**Input is polled `Console.ReadKey(intercept: true)`, not `ReadConsoleInputW`.** The BCL already folds Windows Terminal's VT sequences and conhost's virtual-key records into one `ConsoleKeyInfo`; rewriting that is a week of edge cases. Polling `KeyAvailable` in short slices is needed because the loop must also notice a resize. `TreatControlCAsInput` is left alone — Ctrl+C stays a standard cancel through `CancelKeyPress`.
 
-**Ввод — `Console.ReadKey(intercept: true)` в опросе, а не `ReadConsoleInputW`.** BCL уже разбирает и VT-последовательности Windows Terminal, и virtual-key-записи conhost в один `ConsoleKeyInfo`; переписывать это — неделя краевых случаев (§18.1 допускает оба пути). Опрос `KeyAvailable` короткими срезами нужен потому, что цикл обязан ещё и замечать ресайз. `TreatControlCAsInput` не трогается вовсе — Ctrl+C остаётся стандартной отменой и приходит через `CancelKeyPress` (§14.3).
+**The terminal is restored three ways:** a `finally` in the host, `ProcessExit` (a second Ctrl+C, a crash) and an explicit `Restore`. The alternate buffer preserves the user's scrollback: the tree never enters their history, and exiting returns the shell exactly as it was.
 
-**Терминал возвращается в исходное состояние тремя путями:** `finally` в хосте, `ProcessExit` (второй Ctrl+C, падение) и явный `Restore`. Альтернативный буфер (`ESC[?1049h`) — это то, что сохраняет пользователю его скроллбэк: дерево не попадает в историю, а выход возвращает оболочку ровно такой, какой она была.
+**Anything that prints leaves the alternate buffer.** An `F5` rescan, the audit screen, opening the config — the host hands the terminal back, does the work in an ordinary console with its progress and questions (including the elevation offer), waits for Enter and returns. That is how §14.6 is honoured without threading a logger through every call. Afterwards the snapshot and summary are reloaded: a new scan may have appeared while we were away.
 
-**Всё, что печатает, выходит из альтернативного буфера.** Скан по `F5`, экран audit, открытие конфига — хост отдаёт терминал, выполняет работу в обычной консоли с её прогрессом и вопросами (включая предложение перезапуска с правами), ждёт Enter и возвращается. Это и есть способ выполнить правило §14.6 без протаскивания логгера через каждый вызов. После возврата снимок и сводка перечитываются: пока нас не было, мог появиться новый скан.
+**The Tree screen keeps no stack of levels.** Its state is the directory, the selection and the scroll offset; going up rebuilds the parent's list and puts the cursor on the node we came out of. A per-level cache would have to be invalidated on every change of sort, filter and size mode — exactly where a tree starts showing yesterday's order. Re-sorting 26k children costs single-digit milliseconds.
 
-**Экран Tree не хранит стек уровней.** Состояние — каталог, выделение и смещение прокрутки; подъём вверх пересобирает список родителя и ставит курсор на тот узел, из которого вышли. Кэш списков по уровням пришлось бы инвалидировать при смене сортировки, фильтра и режима размеров — именно там дерево начинает показывать вчерашний порядок. Пересортировка 26 тыс. детей стоит единицы миллисекунд, так что платить за это нечем.
+**Search covers the whole snapshot, not the current directory** — otherwise it is useless, because what is being looked for is five levels down. Names are decoded into a `stackalloc` buffer rather than materialised as strings: 1.58M short strings would cost more in collections than the search itself (§17.3). Up to 2000 matches sorted by size; `n`/`N` jump between them, clearing the filter if it hides a hit.
 
-**Поиск идёт по всему снимку, а не по текущему каталогу** — иначе он бесполезен: искомое лежит на пять уровней ниже. Имена декодируются в стековый буфер (`Encoding.UTF8.GetChars` в `stackalloc`), а не материализуются строками: 1.58 млн коротких строк стоили бы больше в сборках мусора, чем сам поиск (§17.3). До 2000 совпадений, отсортированных по размеру; `n`/`N` прыгают по ним, попутно снимая фильтр, если он прячет найденное.
+**Marks (`x`, `a`, `X`) are implemented; deletion is not.** `d` and `K` name the phase they arrive in instead of silently doing nothing. Marks are stored as node indices and cleared on any snapshot change: an index pointing into a different tree is the worst kind of bug for a deletion list.
 
-**Пометки (`x`, `a`, `X`) реализованы, удаление — нет.** `d` и `K` называют фазу, в которой появятся (P6 и P7), вместо того чтобы молча ничего не делать. Пометки хранятся индексами узлов и сбрасываются при любой смене снимка: индекс, указывающий в другое дерево, — худший вид ошибки для списка на удаление.
+**`o` refuses to launch executables** (§15.3) before any dialog, not "with a warning". Everything else gets a confirmation showing the sanitised name, the real extension and a mark-of-the-web note. `y` confirms, **not** Enter: a dialog that appears under a finger already travelling towards Enter is not a confirmation. The P6 deletion dialog inherits the rule. `e` opens Explorer through `SHParseDisplayName` + `SHOpenFolderAndSelectItems` (§15.2).
 
-**`o` отказывается запускать исполняемые файлы** (§15.3) — до всякого диалога, а не «с предупреждением». Для остального показывается подтверждение с санитизированным именем, реальным расширением и пометкой mark-of-the-web. Подтверждает `y`, а **не** Enter: диалог, возникающий под пальцем, который уже летит к Enter, — это не подтверждение. То же правило унаследует диалог удаления в P6. `e` открывает Проводник через `SHParseDisplayName` + `SHOpenFolderAndSelectItems` (§15.2), без командной строки.
+**Overview and `pathmemo status` collect the same data** (`StatusReport`): free space comes from the volume and is always current, everything else comes from the last scan and is dated, so every stored number carries its scan id. A locked database costs the history block and nothing else. The sparkline scales between its minimum and maximum rather than from zero: a disk that went from 401 to 409 GB would otherwise be a flat line, which is precisely what such a row must not do.
 
-**Overview и `pathmemo status` собирают одни и те же данные** (`StatusReport`): свободное место берётся у тома и всегда актуально, всё остальное — из последнего скана и потому датировано, поэтому каждое сохранённое число на экране несёт номер скана. Занятая база стоит блока истории и ничего больше. Спарклайн масштабируется между минимумом и максимумом, а не от нуля: диск, прошедший путь с 401 до 409 ГБ, иначе рисовался бы плоской линией — ровно то, чего строка не должна допускать.
+**Glyphs follow the console font.** Frames, bars and the sparkline are box-drawing and block characters, which only a TrueType font has, and an old console profile hands a double-click the raster Terminal font. `GetCurrentConsoleFontEx` checks `TMPF_TRUETYPE` once at startup and falls back to ASCII: `#` and `.` in bars, `+`/`-`/`|` in frames, `>` for the cursor. Not a crippled mode — it is how disk utilities looked for twenty years. `PATHMEMO_ASCII=1` forces it, and tests it.
 
-**Глифы выбираются по шрифту консоли.** Рамки, бары и спарклайн — это box-drawing и блочные символы, а их умеет только TrueType-шрифт. Старый профиль консоли отдаёт двойному клику растровый Terminal, и весь экран стал бы мусором. `GetCurrentConsoleFontEx` проверяет бит `TMPF_TRUETYPE` один раз на старте, и при его отсутствии включается ASCII-набор: `#` и `.` в барах, `+`/`-`/`|` в рамках, `>` под курсором, `-` вместо `·` в разделителях. Это не ущербный режим, а то, как выглядели дисковые утилиты двадцать лет подряд. `PATHMEMO_ASCII=1` включает его принудительно — им же он и тестируется, юнитом и вживую.
+**Deviations from the letter of §14:** the filter is on `t` rather than `Tab`; the audit screen is the line-based one from P2; Enter does not confirm in dialogs; reclaim badges wait for P7.
 
-**Отклонения от буквы §14:** переключение фильтра на `t` вместо `Tab`; экран audit (`3`) — построчный из P2, а не новый; `Enter` в диалогах не подтверждает; бейджи reclaim ждут P7.
-
-**Проверено вживую** (conhost, 118×30): переключение экранов, спуск, help, поиск («402 совпадения по 1.58 млн узлов»), Details, выход по `Q`; Ctrl+C внутри TUI возвращает оболочку с нетронутым скроллбэком и работающей командной строкой; окно, уменьшенное до 60×17, показывает `pathmemo needs 80x24; this window is 60x17`, а после увеличения кадр перерисовывается целиком. Запуск через оболочку (то же, что двойной клик): заголовок `pathmemo 0.1.0`, окно 110×32, иконка в заголовке и на панели задач; клик и протяжка мышью внутри окна ничего не ломают — экран продолжает отвечать на клавиши; `PATHMEMO_ASCII=1` даёт полностью ASCII-кадр.
+**Verified live** (conhost, 118×30): screen switching, descending, help, search ("402 matches across 1.58M nodes"), Details, quitting with `Q`; Ctrl+C inside the TUI returns the shell with its scrollback untouched; a window shrunk to 60×17 shows `pathmemo needs 80x24; this window is 60x17` and redraws in full when enlarged. Launched through the shell (the same as a double-click): title `pathmemo 0.1.0`, a 110×32 window, the icon in the title bar and on the taskbar; clicking and dragging inside the window breaks nothing; `PATHMEMO_ASCII=1` gives a fully ASCII frame.
 
 ---
 
-## 15. Интеграция с ОС
+## 15. OS integration
 
-### 15.1. Буфер обмена
+### 15.1. Clipboard
 
-Три пути, в порядке попытки:
+Three paths, in order: **P/Invoke** `OpenClipboard` / `SetClipboardData(CF_UNICODETEXT)` on a dedicated STA thread (~40 lines, no dependencies); **OSC 52**, which works in Windows Terminal, WezTerm, kitty and, crucially, **over SSH**, enabled when `WT_SESSION`/`TERM_PROGRAM` are known or `--clipboard osc52` is given; and finally a refusal that prints the path to stdout.
 
-1. **P/Invoke** `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)` на выделенном STA-потоке. ~40 строк, нулевые зависимости.
-2. **OSC 52** (`ESC ] 52 ; c ; <base64> BEL`) — работает в Windows Terminal, WezTerm, kitty и, главное, **через SSH**. Включается, если `WT_SESSION`/`TERM_PROGRAM` известны или явно `--clipboard osc52`.
-3. Отказ с сообщением и выводом пути в stdout, чтобы пользователь скопировал сам.
+`System.Windows.Forms.Clipboard` was rejected: `<UseWindowsForms>`, +10 MB of binary, and a running message pump inside a console app. `clip.exe` was rejected as the primary path: piping encodings is finicky (UTF-16LE with a BOM) and it costs a process.
 
-**`System.Windows.Forms.Clipboard` отвергнут:** требует `<UseWindowsForms>true</UseWindowsForms>`, +10 МБ к бинарнику, STA + работающий message pump в консольном приложении. `clip.exe` отвергнут как основной путь: кодировка через пайп капризна (нужен UTF-16LE с BOM), плюс лишний процесс.
+### 15.2. Reveal in Explorer
 
-### 15.2. Показать в Проводнике
-
-**Не через командную строку.** `Process.Start("explorer.exe", $"/select,\"{path}\"")` уязвим: путь с кавычкой ломает парсинг, а такие имена существуют (созданы WSL/Cygwin/Samba через `\\?\`), и `ArgumentList` тут не помогает — `explorer /select` требует именно склеенную форму.
+**Not through a command line.** `Process.Start("explorer.exe", $"/select,\"{path}\"")` is exploitable: a quote in the path breaks the parsing, such names do exist (created through `\\?\` by WSL, Cygwin and Samba), and `ArgumentList` does not help because `explorer /select` demands the concatenated form.
 
 ```
 SHParseDisplayName(path, null, out pidl, 0, out _)
 SHOpenFolderAndSelectItems(parentPidl, 1, &childPidl, 0)
 ```
-Без командной строки, без лишнего процесса, быстрее.
 
-### 15.3. Открыть файл — под подтверждением
+### 15.3. Opening a file, under confirmation
 
-`Process.Start(UseShellExecute = true)` на произвольном найденном файле = **запуск недоверенного кода одной клавишей**. Инструмент сканирует весь диск, включая `Downloads`, где лежат `invoice.pdf.exe`, `photo.scr`, `update.hta`.
+`Process.Start(UseShellExecute = true)` on an arbitrary found file is **running untrusted code with one keystroke**. The tool scans the whole disk, `Downloads` included, where `invoice.pdf.exe` and `update.hta` live.
 
-Правила:
-- Клавиша `o`, **не** соседняя с деструктивными.
-- Расширение в списке исполняемых (`exe com scr bat cmd ps1 psm1 vbs vbe js jse wsf wsh hta msi msp msc reg lnk url jar appx cpl pif inf`) → **отказ** с текстом:
-  `"Refusing to launch executable files. Press e to open the containing folder instead."`
-- Остальное — подтверждение с показом **санитизированного** имени, реального расширения и наличия Mark-of-the-Web (`Zone.Identifier` ADS → «downloaded from the internet»).
-- `ui.confirmOpenExecutables: false` не снимает запрет на исполняемые, только убирает диалог для документов.
+- The key is `o`, deliberately not next to the destructive ones.
+- An extension on the executable list (`exe com scr bat cmd ps1 psm1 vbs vbe js jse wsf wsh hta msi msp msc reg lnk url jar appx cpl pif inf`) is **refused**: `"Refusing to launch executable files. Press e to open the containing folder instead."`
+- Everything else gets a confirmation showing the **sanitised** name, the real extension and whether the file carries a mark of the web.
+- `ui.confirmOpenExecutables: false` does not lift the ban on executables; it only drops the dialog for documents.
 
-### 15.4. Внешние утилиты
+### 15.4. External tools
 
-Вызываются только для **чтения** (§6.3):
-- полный путь из `%WINDIR%\System32\...` — защита от PATH hijacking;
-- `ProcessStartInfo.ArgumentList` (никогда не склеенная строка), `UseShellExecute = false`, `CreateNoWindow = true`;
-- таймаут 30 с + kill process tree;
-- `Environment["__COMPAT_LAYER"]` не наследуется; рабочий каталог — `%WINDIR%\System32`.
+Read-only (§6.3): an absolute path under `%WINDIR%\System32` against PATH hijacking; `ArgumentList`, never a joined string; `UseShellExecute = false`, `CreateNoWindow = true`; a 30 s timeout with a process-tree kill; `__COMPAT_LAYER` not inherited.
 
 ### 15.5. Long paths
 
-- Манифест: `<longPathAware>true</longPathAware>`.
-- `AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false)`.
-- Все Win32-вызовы — с `\\?\`-префиксом при длине > 250.
-- MFT-сканер лимита путей **не имеет** вовсе: он не строит строки при обходе.
+`<longPathAware>true</longPathAware>` in the manifest, legacy path handling off, and a `\\?\` prefix on every Win32 call past 250 characters. The MFT scanner has **no** path limit at all: it builds no strings while walking.
 
 ---
 
-## 16. Модель угроз и защитные меры
+## 16. Threat model
 
-Сводная таблица. Каждая строка — реальный сценарий, не теоретический.
+Every row is a real scenario, not a theoretical one.
 
-| # | Угроза | Механизм | Мера |
-|---|---|---|---|
-| T1 | Удаление системных файлов | Строковый защитный список обходится 12 способами (регистр, 8.3, `\\?\`, UNC `c$`, junction, mount point, `..`), плюс `C:\` захардкожен | Канонизация через `GetFinalPathNameByHandle(VOLUME_NAME_GUID)` + `SHGetKnownFolderPath` (§9.3) |
-| T2 | Выход рекурсивного удаления за пределы дерева | Подмена подкаталога на junction между проверкой и удалением (TOCTOU) | Обход по handle с `RootDirectory` + `FILE_OPEN_REPARSE_POINT` (§9.5) |
-| T3 | Удаление не того, что показали | Между сканом и удалением прошли часы | Повторная проверка size+mtime на том же handle; расхождение → отказ (§9.3 шаг 5) |
-| T4 | Запуск малвари | «Открыть файл» на `invoice.pdf.exe` из `Downloads` | Запрет исполняемых расширений, подтверждение для остальных, MotW-предупреждение (§15.3) |
-| T5 | Спуфинг имени файла | RTL-override `U+202E` в имени | Вырезание bidi/control/zero-width при отрисовке (§14.4) |
-| T6 | Инъекция в командную строку | Кавычка в пути → `explorer.exe /select,"..."` | `SHOpenFolderAndSelectItems`, командная строка не строится (§15.2) |
-| T7 | Локальное повышение привилегий | Конфиг в `%LOCALAPPDATA%` (user-writable) читается elevated-процессом; `logFilePath` → произвольная запись от админа | Elevated-режим не берёт пути из конфига; проверка DACL; нет ключей «выполнить команду» (§12.1) |
-| T8 | PATH hijacking | `vssadmin`/`dism` подменены в `PATH` | Абсолютные пути из `%WINDIR%\System32`, `UseShellExecute=false` (§15.4) |
-| T9 | ReDoS | Regex из конфига + миллион глубоких путей = катастрофический бэктрекинг, скан вешается | Глобы по умолчанию; regex только с `NonBacktracking` + 50 мс таймаут (§12.2) |
-| T10 | Гидратация облачных файлов | Хеширование placeholder'а OneDrive **скачивает** его: «поиск дубликатов» утягивает 200 ГБ и забивает диск | Проверка `RECALL_ON_*`/`OFFLINE` до открытия + `FILE_FLAG_OPEN_NO_RECALL` (§8.4) |
-| T11 | Потеря единственной копии | В группе дубликатов сняты отметки со всех файлов | Инвариант «минимум один остаётся», проверяемый в ядре, не в UI (§8.4) |
-| T12 | Тихое безвозвратное удаление | Файл больше квоты корзины → Shell удаляет навсегда молча | Своя проверка квоты (`SHQueryRecycleBin` + реестр) → переключение на Quarantine (§9.6) |
-| T13 | Утечка приватных данных | Экспорт/лог содержит полную карту диска: имена проектов, ФИО в документах | `--redact` (хеширование имён с сохранением структуры и размеров); `logging.logFilePaths: false` по умолчанию |
-| T14 | Повреждение своей БД | Отключение питания при записи | WAL + `synchronous=NORMAL` + `integrity_check` **только после нечистого выхода** (маркерный файл), а не на каждом старте |
-| T15 | Инструмент забивает диск | Retention 30/180/730 дней × 150 МБ снимков = 15+ ГБ | Бинарные снимки 10–25 МБ + жёсткий лимит 400 МБ (§5.4) |
-| T16 | Рекурсивный рост | pathmemo сканирует свой каталог данных, растёт, снова сканирует | Каталог помечен `SelfData`, исключён из reclaim, не может быть удалён (кроме `purge`) |
-| T17 | Убийство процесса при сохранении | `Console.CancelKeyPress` имеет лимит времени; процесс убивают посередине записи | Обработчик только ставит токен; запись в основном потоке с таймаутом; второй `Ctrl+C` = жёсткий выход (§4.8) |
-| T18 | Симлинк-петля | `AppData\Local\Application Data` → сам себя | `ShouldRecurseIntoEntry` запрещает reparse points; дополнительно лимит глубины 512 |
-| T19 | Удаление занятых файлов ломает приложение | Удаление активного кэша работающего браузера | Проверка `NumberOfLinks`/sharing; `FILE_DISPOSITION_POSIX_SEMANTICS` для корректного отложенного удаления; предупреждение «close <app> first» для известных правил |
-| T20 | Конкурентные процессы pathmemo | Два скана пишут в одну БД | Именованный mutex на каталог данных + `busy_timeout`; второй экземпляр читает, но не пишет, exit `EX_LOCKED` для операций записи. *P4:* реализованы WAL + `busy_timeout 5000` + отказ от записи с предупреждением (снимок сохраняется); mutex не понадобился — WAL сериализует писателей сам, а снимки пишутся под разными номерами |
+| # | Threat | Countermeasure |
+|---|---|---|
+| T1 | Deleting system files — a string-based protected list is bypassable twelve ways (case, 8.3, `\\?\`, UNC `c$`, junction, mount point, `..`), and `C:\` is hard-coded to begin with | Canonicalisation through `GetFinalPathNameByHandle(VOLUME_NAME_GUID)` plus `SHGetKnownFolderPath` (§9.3) |
+| T2 | Recursive deletion escaping the tree — a subdirectory swapped for a junction between check and delete (TOCTOU) | Handle-relative traversal with `RootDirectory` and `FILE_OPEN_REPARSE_POINT` (§9.5) |
+| T3 | Deleting something other than what was shown — hours passed since the scan | Size and mtime re-read on the same handle; a mismatch refuses (§9.3) |
+| T4 | Running malware — "open file" on `invoice.pdf.exe` from `Downloads` | Executable extensions refused, confirmation for the rest, MotW warning (§15.3) |
+| T5 | File-name spoofing with an RTL override `U+202E` | Bidi, control and zero-width characters stripped on render (§14.4) |
+| T6 | Command-line injection — a quote in a path reaching `explorer.exe /select,"..."` | `SHOpenFolderAndSelectItems`; no command line is built (§15.2) |
+| T7 | Local privilege escalation — a user-writable config read by an elevated process turns `logFilePath` into arbitrary write as admin | Elevated mode takes no paths from the config; DACL check; no "run a command" keys (§12.1) |
+| T8 | PATH hijacking — `vssadmin` or `dism` replaced on `PATH` | Absolute paths under `%WINDIR%\System32`, `UseShellExecute=false` (§15.4) |
+| T9 | ReDoS — a config regex against a million deep paths hangs the scan | Globs by default; regex only with `NonBacktracking` and a 50 ms timeout (§12.2) |
+| T10 | Hydrating cloud files — hashing a OneDrive placeholder **downloads** it, pulling 200 GB and filling the disk | `RECALL_ON_*`/`OFFLINE` checked before opening, plus `FILE_FLAG_OPEN_NO_RECALL` (§8.4) |
+| T11 | Losing the only copy — every file in a duplicate group unmarked | "At least one survives" enforced in the core, not the UI (§8.4) |
+| T12 | Silent permanent deletion — a file over the Recycle Bin quota destroyed silently by the Shell | Our own quota check switches to Quarantine (§9.6) |
+| T13 | Leaking private data — an export is a full map of the disk: project names, people's names | `--redact` (hashed names, structure and sizes preserved); `logFilePaths: false` by default |
+| T14 | Corrupting our own database on power loss | WAL, `synchronous=NORMAL`, `integrity_check` **only after an unclean exit** |
+| T15 | The tool filling the disk | Binary snapshots of 10–25 MB and a hard 400 MB cap (§5.4) |
+| T16 | Recursive growth — pathmemo scans its own data, grows, scans again | Flagged `SelfData`, excluded from reclaim, undeletable except by `purge` |
+| T17 | The process killed mid-save — `Console.CancelKeyPress` is time-limited | The handler only sets a token; the main thread writes with a timeout; a second `Ctrl+C` is a hard exit (§4.8) |
+| T18 | Symlink loop — `AppData\Local\Application Data` pointing at itself | Reparse points are never entered, plus a depth limit of 512 |
+| T19 | Deleting in-use files breaks an application | `NumberOfLinks` and sharing checked; `FILE_DISPOSITION_POSIX_SEMANTICS`; a "close <app> first" warning on known rules |
+| T20 | Concurrent pathmemo processes writing to one database | WAL plus `busy_timeout`, and a refusal to write with a warning while still saving the snapshot. *P4:* no mutex needed — WAL serialises writers, and snapshots use different numbers |
 
 ---
+## 17. Code architecture
 
-## 17. Архитектура кода
-
-### 17.1. Два проекта, не шесть
+### 17.1. Two projects, not six
 
 ```
 pathmemo/
-├── pathmemo.sln
-├── Directory.Build.props
-├── src/
-│   └── PathMemo/                      ← весь код, разделение папками
-│       ├── PathMemo.csproj
-│       ├── Program.cs
-│       ├── app.manifest               longPathAware, requestedExecutionLevel=asInvoker
-│       ├── Resources/app.ico
-│       │
-│       ├── Cli/
-│       │   ├── ArgParse.cs            разборщики значений: размеры, длительности, даты, режимы
-│       │   ├── Commands/              ScanCommand, TreeCommand, TopCommand, AuditCommand,
-│       │   │                          HistoryCommand, DiffCommand, DoctorCommand,
-│       │   │                          StatusCommand (+ StatusReport — общий с Overview)
-│       │   ├── Interactive/           Launcher, Browser, AuditView, ElevationPrompt
-│       │   │                          (построчный fallback для терминалов без VT)
-│       │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv)
-│       │
-│       ├── Tui/
-│       │   ├── TuiHost.cs             цикл ввода + рендер, suspend на время скана
-│       │   ├── TuiSession.cs          снимок, режим размеров, пометки, ITuiView
-│       │   ├── Terminal/              Screen (кадровый буфер + строчный diff), Line,
-│       │   │                          KeyReader, VirtualTerminal, TextWidth, Sanitizer, Draw
-│       │   ├── Screens/               OverviewScreen, TreeScreen
-│       │   │                          (AuditScreen — P2-построчный, Reclaim P7, Duplicates P8)
-│       │   └── Dialogs/               DetailsDialog, ConfirmDialog, SortMenu, HelpDialog
-│       │                              (поиск — состояние TreeScreen, не отдельный файл)
-│       │
-│       ├── Scanning/
-│       │   ├── IScanner.cs            ← ОДИН из немногих оправданных интерфейсов: 2 реализации
-│       │   ├── Mft/MftScanner.cs      дерево из записей $MFT, BFS, владельцы hardlink'ов
-│       │   ├── Mft/MftParser.cs       разбор записей $MFT: fixup, атрибуты, data runs
-│       │   ├── Mft/MftVolume.cs       \\.\C:, экстенты $MFT из записи 0, позиционное чтение
-│       │   ├── WalkScanner.cs
-│       │   ├── FastEnumerator.cs
-│       │   ├── UsnIncrementalScanner.cs
-│       │   ├── DirectoryWorkQueue.cs  work-stealing
-│       │   └── MediaTypeDetector.cs   HDD/SSD → parallelism
-│       │
-│       ├── Snapshots/
-│       │   ├── SnapshotBuilder.cs     дерево из результатов walk-обхода
-│       │   ├── SnapshotFile.cs        формат .pmsnap: секции, deflate, заголовок
-│       │   ├── SnapshotStore.cs       нумерация, retention, поиск
-│       │   ├── NodeStore.cs           SoA-массивы
-│       │   ├── NameBlob.cs            интернирование сегментов
-│       │   └── TreeAssembly.cs        агрегация с учётом hardlink-ссылок, self-data, склейка томов
-│       │
-│       ├── Analysis/
-│       │   ├── TreeQuery.cs           агрегаты, топы, фильтры по снимку
-│       │   ├── SnapshotDiff.cs        merge-join двух снимков, «объясняющий» уровень
-│       │   ├── FileCategory.cs        восемь корзин: каталог важнее расширения
-│       │   ├── ScanAggregates.cs      итоги по категориям и расширениям для БД
-│       │   ├── RuleEngine.cs          глобы + матчинг
-│       │   ├── ReclaimPlanner.cs
-│       │   └── Reconciler.cs          сверка с томом, unaccounted
-│       │
-│       ├── Audit/
-│       │   ├── IAuditProbe.cs         ← оправданный интерфейс: ~20 реализаций
-│       │   ├── AuditRunner.cs
-│       │   └── Probes/                VssProbe, WinSxSProbe, WslProbe, DockerProbe,
-│       │                              HibernationProbe, RecycleBinProbe, DumpsProbe, …
-│       │
-│       ├── Duplicates/
-│       │   ├── DuplicateFinder.cs
-│       │   ├── HashPipeline.cs
-│       │   ├── ByteComparer.cs
-│       │   └── HashCache.cs
-│       │
-│       ├── Deletion/
-│       │   ├── IDeleteBackend.cs      ← оправданный: recycle|quarantine|permanent + no-op для тестов
-│       │   ├── PathGuard.cs           КРИТИЧЕСКИЙ: канонизация + protected set
-│       │   ├── HandleTreeDeleter.cs   КРИТИЧЕСКИЙ: рекурсия по handle
-│       │   ├── QuarantineStore.cs
-│       │   ├── RecycleBinBackend.cs   IFileOperation + ProgressSink
-│       │   ├── PermanentBackend.cs
-│       │   └── FreeSpaceVerifier.cs
-│       │
-│       ├── Platform/
-│       │   ├── Native/                P/Invoke, сгруппированные по DLL
-│       │   ├── Clipboard.cs
-│       │   ├── ShellReveal.cs         SHParseDisplayName + SHOpenFolderAndSelectItems
-│       │   ├── FileLaunch.cs          отказ для исполняемых, mark-of-the-web
-│       │   ├── Elevation.cs
-│       │   ├── KnownFolders.cs
-│       │   ├── VolumeInfo.cs
-│       │   └── TaskScheduler.cs
-│       │
-│       ├── Storage/                   (в v3-спецификации назывался Data/)
-│       │   ├── Database.cs            открытие, PRAGMA, миграция через user_version,
-│       │   │                          integrity_check после грязного выхода
-│       │   ├── Schema.sql             embedded, вся схема §11 одной версией
-│       │   ├── ScanCatalog.cs         сверка БД с каталогом снимков, выделение id
-│       │   ├── ScanRecords.cs         строки scans / scan_volumes
-│       │   ├── ScanRepository.cs      история, тома, агрегаты
-│       │   └── AuditRepository.cs     findings с detail_json
-│       │
-│       └── Config/
-│           ├── AppConfig.cs
-│           ├── ConfigLoader.cs        + DACL-проверка при elevated
-│           └── DefaultRules.cs
-└── tests/
-    └── PathMemo.Tests/
+├── pathmemo.sln  ·  Directory.Build.props  ·  global.json (pins the SDK to .NET 9)
+├── src/PathMemo/                      ← all the code, separated by folders
+│   ├── Program.cs  ·  app.manifest (longPathAware, asInvoker)  ·  Resources/app.ico
+│   │
+│   ├── Cli/
+│   │   ├── ArgParse.cs            value parsers: sizes, durations, dates, modes
+│   │   ├── Commands/              Scan, Tree, Top, Audit, History, Diff, Doctor,
+│   │   │                          Status (+ StatusReport, shared with Overview)
+│   │   ├── Interactive/           Launcher, Browser, AuditView, ElevationPrompt
+│   │   │                          (line-based fallback for terminals without VT)
+│   │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv)
+│   │
+│   ├── Tui/
+│   │   ├── TuiHost.cs             input loop and render, suspended during a scan
+│   │   ├── TuiSession.cs          snapshot, size mode, marks, ITuiView
+│   │   ├── Terminal/              Screen (frame buffer + row diff), Line, KeyReader,
+│   │   │                          VirtualTerminal, TextWidth, Sanitizer, Draw
+│   │   ├── Screens/               OverviewScreen, TreeScreen
+│   │   └── Dialogs/               Details, Confirm, SortMenu, Help
+│   │                              (search is TreeScreen state, not its own file)
+│   │
+│   ├── Scanning/
+│   │   ├── IScanner.cs            ← one of the few justified interfaces
+│   │   ├── Mft/                   MftScanner (BFS, hard-link owners), MftParser
+│   │   │                          (fixup, attributes, data runs), MftVolume (\\.\C:,
+│   │   │                          $MFT extents from record 0, positional reads)
+│   │   ├── WalkScanner.cs  ·  FastEnumerator.cs  ·  UsnIncrementalScanner.cs
+│   │   ├── DirectoryWorkQueue.cs  work-stealing
+│   │   └── MediaTypeDetector.cs   HDD/SSD → parallelism
+│   │
+│   ├── Snapshots/                 SnapshotBuilder, SnapshotFile (.pmsnap sections and
+│   │                              header), SnapshotStore (numbering, retention),
+│   │                              NodeStore (SoA), NameBlob, TreeAssembly
+│   │
+│   ├── Analysis/                  TreeQuery, SnapshotDiff (merge join), FileCategory,
+│   │                              ScanAggregates, RuleEngine, ReclaimPlanner, Reconciler
+│   │
+│   ├── Audit/                     IAuditProbe ← justified: ~20 implementations;
+│   │                              AuditRunner; Probes/ (Vss, WinSxS, Wsl, Docker,
+│   │                              Hibernation, RecycleBin, Dumps, …)
+│   │
+│   ├── Duplicates/                DuplicateFinder, HashPipeline, ByteComparer, HashCache
+│   │
+│   ├── Deletion/
+│   │   ├── IDeleteBackend.cs      ← justified: recycle|quarantine|permanent + test no-op
+│   │   ├── PathGuard.cs           CRITICAL: canonicalisation and the protected set
+│   │   ├── HandleTreeDeleter.cs   CRITICAL: handle-relative recursion
+│   │   └── QuarantineStore, RecycleBinBackend, PermanentBackend, FreeSpaceVerifier
+│   │
+│   ├── Platform/                  Native/ (P/Invoke by DLL), Clipboard, ShellReveal,
+│   │                              FileLaunch, Elevation, KnownFolders, VolumeInfo,
+│   │                              TaskScheduler
+│   │
+│   ├── Storage/                   Database (PRAGMA, user_version, integrity_check),
+│   │                              Schema.sql (embedded, all of §11), ScanCatalog
+│   │                              (file-vs-row reconciliation, id allocation),
+│   │                              ScanRecords, ScanRepository, AuditRepository
+│   │
+│   └── Config/                    AppConfig, ConfigLoader (+ DACL check), DefaultRules
+└── tests/PathMemo.Tests/
 ```
 
-**Почему не шесть проектов:** v2 предлагала `Cli / Core / Data / Platform / Reporting / Tests`. Для инструмента, который пишет один человек и который никогда не будет библиотекой, это трение без выгоды: дольше сборка, `InternalsVisibleTo`-церемонии, DI ради DI, и невозможность просто вызвать функцию из соседней папки. Границы поддерживаются папками и код-ревью. Разделять — когда появится второй консьюмер.
+**Why not six projects.** For a tool written by one person that will never be a library, `Cli / Core / Data / Platform / Reporting` is friction without benefit: slower builds, `InternalsVisibleTo` ceremony, DI for the sake of DI, and no way to just call a function in the next folder. Folders and code review hold the boundaries. Split when there is a second consumer.
 
-### 17.2. Интерфейсы только там, где есть 2+ реализации
+### 17.2. Interfaces only where there are 2+ implementations
 
 ```csharp
-// ОПРАВДАНЫ: реальная полиморфия
+// JUSTIFIED: real polymorphism
 interface IScanner        { ... }   // MftScanner, WalkScanner, UsnIncrementalScanner
-interface IAuditProbe     { ... }   // ~20 проб
-interface IDeleteBackend  { ... }   // recycle, quarantine, permanent, no-op (тесты)
+interface IAuditProbe     { ... }   // ~20 probes
+interface IDeleteBackend  { ... }   // recycle, quarantine, permanent, no-op (tests)
 
-// ОТВЕРГНУТЫ: одна реализация, интерфейс — чистый оверхед
+// REJECTED: one implementation, so the interface is pure overhead
 // IClipboardService, IShellService, IReportWriter, IScanRepository
-// → статические классы / конкретные типы. Тестируются интеграционно.
+// -> static classes / concrete types, covered by integration tests.
 ```
 
-`IScanService.ScanAsync` из v2, возвращавший `long` (id в БД), **разделён**: сканер ничего не знает о персистентности.
+A scanner knows nothing about persistence, so the two are separate and explicit: `IScanner.ScanAsync(request, progress, ct)` returns a `ScanResult`, and `ScanStore.Save(result)` writes the `.pmsnap` and the database rows, returning the id.
 
-```csharp
-interface IScanner
-{
-    ScannerKind Kind { get; }
-    bool CanScan(VolumeInfo volume, bool elevated);
+### 17.3. Allocation rules on the hot path
 
-    Task<ScanResult> ScanAsync(
-        ScanRequest request,
-        IProgress<ScanProgress> progress,
-        CancellationToken ct);
-}
+RSS under 250 MB at a million files is reachable **only** if:
 
-// Персистентность — отдельно и явно
-sealed class ScanStore
-{
-    long Save(ScanResult result);                   // пишет .pmsnap + строки в БД
-    SnapshotReader OpenSnapshot(long scanId);
-}
-```
-
-### 17.3. Правила аллокаций на горячем пути
-
-Требование RSS < 250 МБ при 1 млн файлов достижимо **только** при соблюдении:
-
-- **Никаких классов на файл.** Ни `List<FileEntry>` из ссылочных типов, ни `string` полного пути на запись. Только SoA-массивы (§5.3).
-- Имена — в общий `byte[]`-блоб, узел хранит смещение.
-- Буферы IO — `ArrayPool<byte>.Shared`, всегда с `try/finally { Return(clearArray: false) }`.
-- Перечисление каталогов — `ReadOnlySpan<char>` без материализации.
-- Счётчики прогресса — `Interlocked`/`volatile` поля, не события на файл.
-- Массивы > 85 КБ идут в LOH → выделяем **один раз** на ожидаемое число узлов (оценка из `FSCTL_GET_NTFS_VOLUME_DATA`), а не растим `List<T>` удвоением. При недооценке — chunked-массивы по 1 млн элементов, не `Array.Resize`.
-- `ServerGarbageCollector = false`, `ConcurrentGarbageCollection = false`, `TieredPGO = true` в csproj: для короткоживущего CLI workstation GC даёт меньший RSS.
+- **No class per file.** No `List<FileEntry>` of reference types, no full-path `string` per entry. Struct-of-arrays only (§5.3), with names in one shared `byte[]` blob and an offset per node.
+- IO buffers come from `ArrayPool<byte>.Shared`, always returned in a `finally`.
+- Directory enumeration stays on `ReadOnlySpan<char>` without materialising.
+- Progress counters are `Interlocked`/`volatile` fields, not an event per file.
+- Arrays over 85 KB go to the LOH, so they are allocated **once** for the expected node count (estimated from `FSCTL_GET_NTFS_VOLUME_DATA`) rather than grown by doubling. When the estimate is short, chunked arrays of 1M elements — never `Array.Resize`.
+- `ServerGarbageCollection=false`, `ConcurrentGarbageCollection=false`, `TieredPGO=true`: for a short-lived CLI, workstation GC gives the lowest RSS.
 
 ---
 
-## 18. Технологический стек
+## 18. Technology stack
 
-| Компонент | Выбор | Почему именно так |
+| Component | Choice | Why |
 |---|---|---|
-| Runtime | **.NET 9** | `FileSystemEnumerator`, `System.IO.Hashing`, `NonBacktracking` regex, лучший single-file |
-| CLI-парсер | ~~System.CommandLine~~ → **свой разбор в `Program.cs`** | **Не понадобился.** Около десяти команд с плоскими опциями — это `switch` на 40 строк плюс `ArgParse` для значений; пакет дал бы генерацию help, который у нас написан руками и точнее, и остался бы главным блокером NativeAOT (§19.4) |
-| Статичный вывод | ~~Spectre.Console~~ → **свой** | **Не понадобился.** Таблицы у нас — три-четыре формата строк с фиксированными колонками, цвет в статичном выводе не используется вовсе, а прогресс — одна перезаписываемая строка. Пакет добавил бы зависимость и вес ради `string.Format`, который уже написан (`SizeFormat`, `PathDisplay`) |
-| TUI | **свой рендерер: кадровый буфер со строчным diff'ом + `Console.ReadKey` в опросе** | см. 18.1 и 14.7. `ReadConsoleInputW` не понадобился: BCL разбирает и VT-последовательности, и virtual-key-записи |
-| SQLite | **Microsoft.Data.Sqlite** + ручной маппинг | Dapper — рефлексия, враждебен trimming/AOT; у нас ~15 запросов, ручной `SqliteDataReader` короче и быстрее. **Добавлен в P4 — единственный PackageReference приложения; trimmed single-file вырос с 19.5 до 22.5 МБ и работает** |
-| Миграции | **`PRAGMA user_version` + embedded .sql** | DbUp — оверкилл (25 строк своего кода) и ломает trimming |
-| Хеш | **System.IO.Hashing (XxHash128)** + `SHA256` из BCL | нулевые нативные зависимости; см. §8.2 |
-| Сжатие снимков | **`System.IO.Compression.DeflateStream`** | в коробке; Zstd дал бы на 30% меньше, но это нативная DLL |
-| Логи | **свой `FileLogger`** (~80 строк) или **Serilog** | Serilog тянет 4 пакета и рефлексию ради структурных логов, которые мы никуда не отправляем; решение — при реализации Phase 1 |
-| Буфер обмена | **P/Invoke + OSC 52** | никаких WinForms (§15.1) |
-| Корзина | **`IFileOperation` через ручной COM-интероп** | без `Microsoft.WindowsAPICodePack` |
-| Планировщик | **`ITaskService` COM** или `schtasks` с `ArgumentList` | |
-| Тесты | **xUnit** + **интеграционные на реальной ФС** | см. §22 |
-| Публикация | **self-contained, single-file, trimmed** | §19 |
+| Runtime | **.NET 9**, pinned by `global.json` | `FileSystemEnumerator`, `System.IO.Hashing`, `NonBacktracking` regex, the best single-file story. The pin stops a machine with a newer SDK compiling the code under a different language version |
+| CLI parser | ~~System.CommandLine~~ → **own parsing** | **Not needed.** Ten commands with flat options are a 40-line `switch` plus `ArgParse`; the package would generate help that is written by hand here and more accurate, and would remain the main NativeAOT blocker (§19.4) |
+| Static output | ~~Spectre.Console~~ → **own** | **Not needed.** Our tables are three or four row formats with fixed columns, static output uses no colour at all, and progress is one rewritten line |
+| TUI | **own renderer** (§18.1, §14.7) | `ReadConsoleInputW` was not needed either: the BCL parses both VT sequences and virtual-key records |
+| SQLite | **Microsoft.Data.Sqlite**, hand-written mapping | Dapper is reflection, hostile to trimming and AOT. **The application's only PackageReference**; the trimmed single file grew from 19.5 to 22.5 MB |
+| Migrations | **`PRAGMA user_version` + embedded .sql** | DbUp is overkill (25 lines of own code) and breaks trimming |
+| Hashing | **XxHash128** plus BCL `SHA256` | zero native dependencies (§8.2) |
+| Snapshot compression | **`DeflateStream`** | in the box; Zstd would be 30% smaller and a native DLL |
+| Logging | **own `FileLogger`** (~80 lines) | Serilog pulls four packages and reflection for logs we send nowhere |
+| Clipboard | **P/Invoke + OSC 52** | no WinForms (§15.1) |
+| Recycle Bin | **`IFileOperation`**, hand-written COM interop | without `Microsoft.WindowsAPICodePack` |
+| Scheduler | **`ITaskService` COM** or `schtasks` | |
+| Tests | **xUnit** plus integration tests on a real filesystem | §22 |
+| Publishing | **self-contained, single-file, trimmed** | §19 |
 
-**Удалено из v2:** Terminal.Gui, Dapper, DbUp, Blake3.NET, System.Windows.Forms, FluentAssertions (xUnit-ассерты достаточны, у FluentAssertions сменилась лицензия).
+Considered and dropped: Terminal.Gui, Dapper, DbUp, Blake3.NET, System.Windows.Forms, FluentAssertions.
 
-### 18.1. Почему не Terminal.Gui
+### 18.1. Why not Terminal.Gui
 
-- v1 — legacy; v2 долгое время был prerelease с меняющимся API.
-- `TableView` ограничен, отрисовка больших списков требует ручной виртуализации всё равно.
-- Активная рефлексия → **теряется trimming, а с ним шанс на 20 МБ вместо 70**; NativeAOT недостижим.
-- Своя модель фокуса/событий конфликтует с одноэкранным приложением, где нужен полный контроль над рендером дерева.
+v1 is legacy and v2 spent a long time in prerelease with a moving API. `TableView` is limited, and large lists need manual virtualisation anyway. Its heavy reflection **costs trimming, and with it the difference between 20 MB and 70**; NativeAOT becomes unreachable. Its own focus and event model fights a single-screen application that needs full control over how the tree is drawn.
 
-Для v3 нужен **один** сложный экран (виртуализированное дерево) и 4 простых + модалки. Это 600–900 строк своего рендера (буфер символов + diff-отрисовка + `ReadConsoleInputW` для клавиш и мыши) с полным контролем, нулевой зависимостью и корректной обработкой ширины CJK/эмодзи, которой у Terminal.Gui всё равно нет.
-
-Если через два экрана окажется, что своё писать дороже — Terminal.Gui v2 остаётся планом B; `Tui/Terminal/` спроектирован так, что рендер-бэкенд заменяем.
+This project needs **one** complex screen (a virtualised tree), four simple ones and some modals — 600–900 lines of own renderer with full control, no dependency, and correct CJK and emoji widths, which Terminal.Gui does not have either. `Tui/Terminal/` is designed so the render backend can be swapped if that judgement turns out wrong.
 
 ---
 
-## 19. Формат поставки и сборка
+## 19. Packaging and build
 
-### 19.1. Артефакты
+### 19.1. Artefacts
 
-| Файл | Размер | Примечание |
+| File | Size | Note |
 |---|---|---|
-| `pathmemo-win-x64.exe` | **16–30 МБ** | основной. Измерено: 16.1 МБ на P0-скелете (77.3 МБ без trimming), 19.5 МБ на P3, 22.5 МБ на P4 (плюс 3 МБ дал `Microsoft.Data.Sqlite` с нативным `e_sqlite3`), **23.0 МБ на P5** — весь TUI поместился в 0.3 МБ, потому что зависимостей у него нет, плюс 0.2 МБ иконки |
-| `pathmemo-win-arm64.exe` | 16–30 МБ | отдельный бинарник |
-| `pathmemo-win-x64.zip` | **10.6 МБ** | exe + README + LICENSE. Собирается `build\publish.ps1 -Zip` |
+| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), **23.0 MB at P5** — the whole TUI fit in 0.3 MB because it has no dependencies |
+| `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
+| `pathmemo-win-x64.zip` | **10.6 MB** | exe + README + LICENSE, built by `build\publish.ps1 -Zip` |
 
-**Иконка** (`src\PathMemo\Resources\app.ico`) рисуется скриптом `build\make-icon.ps1`, а не лежит нечитаемым бинарником: форма — это двенадцать строк кода, и перегенерировать её дешевле, чем объяснять, что внутри блоба. Тёмный скруглённый квадрат и почти замкнутое кольцо — «диск почти полон», то состояние, ради которого такой инструмент и ищут. Размеры 16–64 сохраняются классическим DIB, а 128 и 256 — PNG: PNG внутри ICO понимает оболочка Windows, но **не** понимает GDI+, а мелкие размеры читает как раз всё подряд.
+**The icon** (`Resources\app.ico`) is drawn by `build\make-icon.ps1` rather than committed as an unreadable binary: the shape is twelve lines of code, and regenerating it is cheaper than explaining what is inside a blob. Sizes 16–64 are stored as classic DIBs and 128/256 as PNG: the Windows shell understands PNG inside an ICO but GDI+ does **not**, while everything reads the small sizes.
 
-«Один exe, x64 и arm64» из v2 — противоречие: это **два** файла. Формулировка: «один файл на архитектуру, без установки, без зависимостей».
+"One exe, x64 and arm64" is a contradiction — that is **two** files. The honest phrasing: one file per architecture, no installer, no dependencies.
 
-### 19.2. csproj
-
-```xml
-<PropertyGroup>
-  <TargetFramework>net9.0</TargetFramework>
-  <OutputType>Exe</OutputType>
-  <Nullable>enable</Nullable>
-  <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-  <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-  <InvariantGlobalization>true</InvariantGlobalization>
-  <ApplicationManifest>app.manifest</ApplicationManifest>
-  <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-  <ServerGarbageCollection>false</ServerGarbageCollection>
-  <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
-  <TieredPGO>true</TieredPGO>
-  <EnableWindowsTargeting>true</EnableWindowsTargeting>
-</PropertyGroup>
-```
+### 19.2. Publish command
 
 ```bash
 dotnet publish src/PathMemo/PathMemo.csproj \
-  -c Release -r win-x64 \
-  --self-contained true \
-  -p:PublishSingleFile=true \
-  -p:PublishTrimmed=true \
-  -p:TrimMode=partial \
+  -c Release -r win-x64 --self-contained true \
+  -p:PublishSingleFile=true -p:PublishTrimmed=true -p:TrimMode=partial \
   -p:IncludeNativeLibrariesForSelfExtract=true \
   -p:EnableCompressionInSingleFile=false \
-  -p:PublishReadyToRun=true \
-  -p:DebugType=embedded \
+  -p:PublishReadyToRun=true -p:DebugType=embedded \
   -o dist/win-x64
 ```
 
-**`EnableCompressionInSingleFile=false` — сознательно.** Сжатие даёт −40% размера, но добавляет 200–400 мс на **каждый** запуск (декомпрессия), а pathmemo — инструмент, который дёргают из консоли десятки раз. 28 МБ без сжатия лучше 17 МБ с задержкой.
+**`EnableCompressionInSingleFile=false` is deliberate.** Compression saves 40% of the size and adds 200–400 ms to **every** launch, and pathmemo is invoked from a console dozens of times a day. 28 MB without compression beats 17 MB with a delay.
 
-`e_sqlite3.dll` — единственная нативная зависимость, вызывающая самораспаковку в `%TEMP%` при первом запуске каждой версии (~150 мс однократно). Приемлемо. Альтернатива на будущее — статическая линковка SQLite или `PublishAot`.
+`e_sqlite3.dll` is the only native dependency, which makes the host self-extract into `%TEMP%` once per version. *Measured in P4:* 1.72 MB extracted in **15 ms, once** — `pathmemo --version` runs in 77 ms on the first launch after clearing the cache and 62 ms afterwards.
 
-*Измерено в P4:* распаковка идёт в `%TEMP%\.net\pathmemo\<hash>\e_sqlite3.dll` (1.72 МБ) и стоит **15 мс однократно**, не 150: `pathmemo --version` — 77 мс на первом запуске после удаления кэша и 62 мс на последующих. Оценка была пессимистичной в нашу пользу.
+### 19.3. Publishing: Releases, not Packages
 
-### 19.3. Публикация: Releases, а не Packages
+**GitHub Packages is the wrong mechanism.** It hosts package registries — npm, NuGet, Maven, containers — with no place for a plain `.exe`, and its NuGet feed demands a personal access token even for public packages. Asking someone to create a token before they can download a disk cleanup tool is exactly what should not happen.
 
-**GitHub Packages не подходит.** Это набор реестров пакетов — npm, NuGet, Maven, контейнеры; места для обычного `.exe` там нет, а NuGet-фид GitHub требует personal access token даже для публичных пакетов. Просить человека завести токен, чтобы скачать утилиту для очистки диска, — ровно то, чего быть не должно.
+**GitHub Releases** is the mechanism for standalone binaries: no account and no token to download, a download counter, and the release URL is what winget, Scoop and Chocolatey point at later.
 
-Механизм для standalone-бинарника — **GitHub Releases**. Скачивание не требует ни аккаунта, ни токена, есть счётчик загрузок, и на URL релиза потом ссылаются winget, Scoop и Chocolatey, если до них дойдёт дело.
+`.github/workflows/release.yml`, on a `v*` tag:
 
-`.github/workflows/release.yml` по тегу `v*`:
-
-1. `dotnet test -c Release` — релиз, не прошедший собственных тестов, существовать не должен;
-2. публикует `win-x64` и `win-arm64` (кросс-сборка arm64 с x64-хоста проверена: 24.6 МБ, 30 с);
-3. штампует версию из тега (`v0.2.0` → `pathmemo --version` = `0.2.0`), поэтому номер в заголовке окна и номер релиза не расходятся;
-4. кладёт рядом `SHA256SUMS.txt` — self-contained exe от незнакомого автора должен быть проверяем;
-5. создаёт релиз через `gh release create` (GitHub CLI предустановлен на раннере) — без сторонних actions в цепочке поставки.
+1. `dotnet test -c Release` — a release that fails its own tests should not exist;
+2. publishes `win-x64` and `win-arm64` (the arm64 cross-build from an x64 host is verified: 24.6 MB, 30 s);
+3. stamps the version from the tag (`v0.2.0` → `pathmemo --version` = `0.2.0`), so the title bar and the release cannot disagree;
+4. writes `SHA256SUMS.txt` beside them — a self-contained exe from an unknown author should be verifiable;
+5. creates the release with `gh release create` (preinstalled on the runner), keeping third-party actions out of the supply chain.
 
 ```bash
 git tag v0.2.0
 git push origin v0.2.0
 ```
 
-`workflow_dispatch` собирает те же архивы без создания релиза — для проверки конвейера.
+`workflow_dispatch` builds the same archives without creating a release, for testing the pipeline.
 
-**Подписи кода нет.** Скачанный из интернета неподписанный exe получает mark-of-the-web, и SmartScreen показывает «Windows protected your PC» с кнопкой *More info → Run anyway*. Это честно написано в тексте релиза. Сертификат OV/EV стоит денег и репутации, которую набирают загрузками; до тех пор — контрольная сумма.
+**There is no code signature.** An unsigned exe downloaded from the internet carries a mark of the web, and SmartScreen shows "Windows protected your PC" with *More info → Run anyway*. The release notes say so plainly. An OV/EV certificate costs money and a reputation built from downloads; until then, the checksum is the answer.
 
-### 19.4. NativeAOT — цель Phase 3
+### 19.4. NativeAOT — a Phase 3 goal
 
-С устранением Dapper/DbUp/Terminal.Gui/Blake3 путь к AOT открыт: `PublishAot=true` даст **~12 МБ и старт за 15 мс** вместо 120. Блокеры на момент v3: `System.CommandLine` (частично AOT-совместим), COM-интероп `IFileOperation` (нужны source-generated wrappers `[GeneratedComInterface]`). Обе задачи решаемы, но не в MVP.
-
-*Состояние на P5:* блокер `System.CommandLine` снят — его никогда и не добавили, разбор аргументов свой. TUI тоже написан без единой зависимости и на AOT переносится как есть. Остаётся `Microsoft.Data.Sqlite` (AOT-совместим с `SQLitePCLRaw`, требует проверки) и COM-интероп, который появится с удалением в P6.
+With Dapper, DbUp, Terminal.Gui and Blake3 out of the picture, the AOT road is open: `PublishAot=true` should give **~12 MB and a 15 ms start** instead of 120. *At P5* the `System.CommandLine` blocker is gone — it was never added — and the TUI is dependency-free and ports as is. What remains is `Microsoft.Data.Sqlite` (AOT-compatible via `SQLitePCLRaw`, needs verifying) and the COM interop that arrives with deletion in P6.
 
 ---
+## 20. Performance budgets
 
-## 20. Бюджеты производительности
+Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defender on.
 
-Измеряется на: Ryzen 7, 32 ГБ, NVMe, Windows 11, 1.2 млн файлов / 420 ГБ на C:, Defender включён.
-
-| Операция | Бюджет | Комментарий |
+| Operation | Budget | Measured |
 |---|---|---|
-| Холодный старт до первого кадра | **< 250 мс** | single-file без сжатия, R2R; **измерено 62 мс** на `--version`, 77 мс при распаковке `e_sqlite3` (однократно на версию) |
-| MFT-скан C:, 1.2 млн записей | **< 10 с** | **измерено 9.1–9.6 с** (1.79 млн записей `$MFT`, 1.27 млн файлов / 399k каталогов / 209 ГБ, 175–184k записей/с, NVMe, Defender включён); целевое 5 с — резерв в параллельном разборе кусков |
-| Walk-скан C:, 1.2 млн файлов | < 150 с | **измерено 40–51 с** (P4, разброс от состояния кэша ФС) с hardlink-дедупликацией для файлов ≥ 1 МБ (16 тыс. handle'ов ≈ 3 с); 41 с без неё на P3. Тот же прогон по C: и D: вместе — 932-гигабайтный HDD добавляет к этому больше пятнадцати минут, поэтому все цифры здесь про C: |
-| Инкрементальный USN-скан | **< 2 с** | обычный случай — 0.3 с |
-| Запись снимка на диск | < 1.5 с | **измерено: 26 МБ на 1.58 млн узлов** |
-| Открытие существующего снимка | **< 300 мс** | **измерено ~250 мс** (полная распаковка; ленивая загрузка секций ещё не включена) |
-| Навигация в дереве (кадр) | **< 16 мс** | 60 FPS, виртуализация. **Измерено 0.08 мс** в обычном каталоге и **0.6 мс** при прокрутке каталога на 26 тыс. записей, где меняется каждая строка (рендер 0.40 мс + запись в терминал 0.19 мс). Первый кадр после загрузки снимка — 4–7 мс |
-| Вход в каталог с 200 тыс. детей | < 50 мс | дети непрерывны в массиве; платится только сортировка. **Измерено 10–15 мс** на самом широком каталоге настоящего диска — `C:\Windows\WinSxS\Manifests`, 26 205 записей; на синтетическом каталоге в 200 тыс. записей — в пределах того же бюджета |
-| Поиск по имени во всём снимке | — | **измерено 56–69 мс** на 1.58 млн узлов (декодирование имён в стековый буфер, без строки на узел); 402 совпадения по `node_modules` |
-| Сбор данных для Overview / `status` | — | **измерено 48–70 мс**: тома, последний скан, ряд «занято» по 40 сканам |
-| Space Audit (все пробы) | < 8 с | **измерено 4.1 с** без прав администратора (21 проба, 175 тыс. файлов в temp); elevated добавляет DISM, 3–6 с |
-| Diff двух снимков | < 500 мс | **измерено 105 мс** сам merge-join на паре снимков 1.58 и 1.67 млн узлов (walk против MFT, 1.4 тыс. изменившихся путей) и 5 мс на паре, где изменился один каталог; плюс 405 мс на загрузку обоих снимков — полная команда 0.66–0.77 с |
-| Импорт снимков в новую БД | — | **измерено 1.6 с** на 4 снимка (106 МБ, 6.5 млн узлов): случай «БД удалили, снимки остались» |
-| Агрегаты по категориям и расширениям | < 500 мс | **измерено 330 мс** на 1.58 млн узлов. Первая версия давала 600 мс и +80 МБ пика: линейный поиск по 200 расширениям на каждый файл и строка на имя. Стало — хеш-поиск по спану и стековые буферы (§17.3) |
-| RSS при MFT-скане 1.2 млн | **< 250 МБ** | SoA-массивы обязательны; elevated-замер пика ещё не снят (скан запускается в отдельном окне) |
-| RSS при walk-скане 1.2 млн | < 400 МБ | **измерено 373 МБ** пик working set (P4; 380 МБ на P3 без агрегатов, 478 МБ с их первой версией, 535 МБ до выноса file id из `RawEntry` в боковой список). Живой снимок при этом 94 МБ (62 байта/узел) — остальное транзиентный GC-хип фазы обхода. |
-| RSS в TUI со загруженным снимком | < 150 МБ | **не выполняется: измерено 182–201 МБ** пикового working set процесса с открытым снимком на 1.58 млн узлов. Само дерево — 94 МБ (SoA-массивы плюс блоб имён); ещё столько же даёт распаковка: `SnapshotFile.Read` материализует каждую секцию в `byte[]` целиком, прежде чем скопировать в массивы. Лечится ленивой загрузкой секций (см. строку «Открытие существующего снимка»), это работа P10. Ранняя оценка 103 МБ снималась на снимке вдвое меньше и без учёта транзиента |
-| Размер каталога данных | **< 500 МБ всегда** | жёсткий лимит |
-| Поиск дубликатов, 200 ГБ кандидатов | IO-bound | ~стоимость чтения 200 ГБ |
+| Cold start to first frame | < 250 ms | **62 ms** (`--version`), 77 ms when `e_sqlite3` is extracted, once per version |
+| MFT scan of C:, 1.2M records | < 10 s | **9.1–9.6 s** — 1.79M `$MFT` records, 1.27M files / 399k dirs / 209 GB, 175–184k rec/s. The 5 s target has headroom in parallel chunk parsing |
+| Walk scan of C:, 1.2M files | < 150 s | **40–51 s** with hard-link dedup for files ≥ 1 MB (16k handles ≈ 3 s); 41 s without it at P3. The spread is filesystem cache state. Adding a 932 GB HDD costs fifteen minutes more, so every figure here is C: only |
+| Incremental USN scan | < 2 s | typically 0.3 s (P9) |
+| Writing a snapshot | < 1.5 s | **26 MB for 1.58M nodes** |
+| Opening an existing snapshot | < 300 ms | **~250 ms**, full decompression; lazy sections are not in yet |
+| Tree navigation, one frame | < 16 ms | **0.08 ms** in an ordinary directory, **0.6 ms** scrolling a 26k-entry one where every row changes; 4–7 ms for the first frame after a load |
+| Entering a directory with 200k children | < 50 ms | **10–15 ms** on the widest real directory (`WinSxS\Manifests`, 26,205 entries); a synthetic 200k one stays in budget. Children are contiguous, so only the sort is paid for |
+| Searching names across a snapshot | — | **56–69 ms** over 1.58M nodes, 402 matches for `node_modules` |
+| Overview / `status` data | — | **48–70 ms**: volumes, last scan, a used-bytes series over 40 scans |
+| Space Audit, all probes | < 8 s | **4.1 s** unelevated (21 probes, 175k files in temp); elevated adds DISM, 3–6 s |
+| Diff of two snapshots | < 500 ms | **105 ms** for the merge join on 1.58M and 1.67M node snapshots, 5 ms where one directory changed, plus 405 ms to load both |
+| Importing snapshots into a fresh database | — | **1.6 s** for 4 snapshots (106 MB, 6.5M nodes) |
+| Category and extension aggregates | < 500 ms | **330 ms** over 1.58M nodes. The first version took 600 ms and +80 MB of peak: a linear scan of 200 extensions per file and a string per name. Now a hash lookup over a span and stack buffers (§17.3) |
+| RSS during an MFT scan | < 250 MB | an elevated peak measurement is still outstanding |
+| RSS during a walk scan | < 400 MB | **373 MB** peak working set (380 MB at P3, 478 MB with the first aggregates, 535 MB before file ids moved out of `RawEntry`). The live snapshot is 94 MB of that; the rest is transient GC heap |
+| RSS in the TUI with a snapshot open | < 150 MB | **not met: 182–201 MB** with a 1.58M-node snapshot open. The tree is 94 MB, and decompression doubles it: `SnapshotFile.Read` materialises each section into a whole `byte[]` before copying. Fixed by lazy section loading in P10. The early 103 MB estimate used a snapshot half the size and ignored the transient |
+| Data directory size | **< 500 MB always** | hard limit |
+| Duplicate search over 200 GB | IO-bound | about the cost of reading 200 GB |
 
 ---
 
-## 21. Критерии приёмки
+## 21. Acceptance criteria
 
-### Корректность цифр
-- [x] `Сумма скана + audit findings + метаданные + unaccounted` = `used bytes` тома, при `unaccounted` < 2% на тестовой машине — **MFT-скан: 209 ГБ из 212 занятых, unaccounted 3.06 ГБ (1.4 %)**; walk без прав: 7.5 %.
-- [ ] Размер `C:\Windows` совпадает с WizTree (режим allocated, с hardlink-дедупликацией) **с точностью 1%** — сверка с WizTree ещё не проводилась; MFT даёт 42.3 ГБ (WinSxS 6.94 ГБ) против 43.4 ГБ (WinSxS 8.47 ГБ) у walk.
-- [ ] Размер `C:\` совпадает с WizTree с точностью 1%.
-- [ ] Sparse `ext4.vhdx` показан по allocated, не по logical, с бейджем `sparse`.
-- [ ] Cloud-only папка OneDrive показана с размером ~0 и бейджем `cloud`, при этом её logical виден в деталях.
-- [ ] Переключение `unique`/`allocated`/`logical` меняет цифры предсказуемо и объяснимо.
+**Correct numbers**
+- [x] Scan + audit findings + metadata + unaccounted = the volume's used bytes, unaccounted < 2% — **MFT: 209 GB of 212, unaccounted 1.4%**; unelevated walk: 7.5%.
+- [ ] `C:\Windows` and `C:\` match WizTree within 1% — not compared yet; MFT gives 42.3 GB (WinSxS 6.94) against the walk's 43.4 GB (WinSxS 8.47).
+- [ ] A sparse `ext4.vhdx` shows allocated, not logical, with a `sparse` badge.
+- [ ] A cloud-only folder shows ~0 with a `cloud` badge, its logical size in details.
+- [ ] Switching `unique`/`allocated`/`logical` changes the numbers predictably.
 
-### Сканирование
-- [x] MFT-скан 1 млн записей завершается за < 10 с — 1.79 млн записей за 9.6 с.
-- [x] Без прав админа предлагается релонч; при отказе скан идёт в degraded с явным предупреждением — `[R]/[C]/[Q]` только при TTY, в скриптах предупреждение в stderr и degraded; `--quiet` пропускает вопрос.
-- [x] На exFAT/FAT32/сетевом диске автоматически используется Walk-сканер — выбор по тому, деревья склеиваются.
-- [ ] Повторный скан того же тома использует USN и завершается за < 2 с.
-- [ ] `Ctrl+C` во время скана прерывает, сохраняет частичный результат со статусом `cancelled`, второй `Ctrl+C` выходит немедленно.
-- [ ] Junction/symlink не вызывает рекурсию; точка видна в дереве с бейджем `reparse` и размером 0.
-- [x] Недоступные пути попадают в `scan_errors` с группировкой; в MFT-режиме их размер известен и показан — MFT видит на 53 тыс. файлов и 38 тыс. каталогов больше, чем walk без прав, ошибок доступа нет по построению.
-- [ ] Каталог данных pathmemo виден в дереве с бейджем `self`.
+**Scanning**
+- [x] An MFT scan of 1M records finishes in < 10 s — 1.79M in 9.6 s.
+- [x] Unelevated, a relaunch is offered and declining scans degraded with a warning — `[R]/[C]/[Q]` only with a TTY; scripts get stderr.
+- [x] exFAT, FAT32 and network drives fall back to the walk scanner, per volume, trees spliced.
+- [x] Unreadable paths land in `scan_errors`, grouped; in MFT mode their size is known — MFT sees 53k more files and 38k more directories than an unelevated walk.
+- [ ] A rescan uses USN and finishes in < 2 s.
+- [ ] `Ctrl+C` saves a partial result as `cancelled`; a second exits immediately.
+- [ ] A junction causes no recursion; the point shows with `reparse` and size 0.
+- [ ] The data directory is visible with a `self` badge.
 
-### Space Audit
-- [ ] Обнаруживается и оценивается: VSS, WinSxS, hiberfil, корзина, WSL vhdx, Docker vhdx, Windows Update cache, dumps, Windows.old (если есть).
-- [ ] Для каждого finding показана команда устранения с пометкой `[admin]` / `[reboot]`, копируемая в буфер.
-- [ ] Ни одна проба не изменяет систему.
-- [ ] Неудачный парсинг вывода `DISM` даёт `status=unknown`, а не `0 bytes`.
+**Space Audit**
+- [ ] VSS, WinSxS, hiberfil, Recycle Bin, WSL and Docker vhdx, Windows Update cache, dumps and Windows.old are all found and sized.
+- [ ] Every finding shows a remedy marked `[admin]` / `[reboot]`, copyable.
+- [ ] No probe changes the system; a failed `DISM` parse yields `unknown`, never `0 bytes`.
 
-### Удаление
-- [ ] Ни один путь из protected set не удаляется, включая варианты `c:\windows`, `C:\WINDOW~1`, `\\?\C:\Windows`, `\\localhost\c$\Windows`, `C:\Users\All Users\...`, `C:\Users\..\Windows`.
-- [ ] Подмена подкаталога на junction во время рекурсивного удаления не приводит к удалению вне дерева (тест с гонкой).
-- [ ] Изменение файла между сканом и удалением приводит к отказу операции.
-- [ ] Карантин: перемещение 18 ГБ занимает < 3 с (переименование, не копирование).
-- [ ] `pathmemo restore <op>` полностью восстанавливает дерево на исходные пути.
-- [ ] `pathmemo purge` освобождает место; фактическая дельта свободного места совпадает с предсказанной ±10%.
-- [ ] Попытка карантина на другом томе отклоняется с понятным сообщением.
-- [ ] Файл больше квоты корзины не попадает в режим `recycle` (переключение на quarantine), не удаляется молча.
-- [ ] `--dry-run` не создаёт и не перемещает ничего; пишется в `dryrun_log`, не в `delete_ops`.
-- [ ] Permanent-удаление > 1 ГБ требует типизированного подтверждения; `--yes` его не обходит.
-- [ ] Каждая операция имеет запись в журнале с per-item результатом.
+**Deletion** (all P6)
+- [ ] No protected path is deleted, including `c:\windows`, `C:\WINDOW~1`, `\\?\C:\Windows`, `\\localhost\c$\Windows`, `C:\Users\All Users\...`, `C:\Users\..\Windows`.
+- [ ] Swapping a subdirectory for a junction mid-delete does not escape the tree (race test).
+- [ ] A file changed between scan and deletion aborts the operation.
+- [ ] Quarantine moves 18 GB in < 3 s (rename, not copy); onto another volume it is refused clearly.
+- [ ] `restore` returns the tree to its original paths; `purge` frees space within 10% of the prediction.
+- [ ] A file over the bin quota never enters `recycle` mode and is never destroyed silently.
+- [ ] `--dry-run` moves nothing and writes to `dryrun_log`, not `delete_ops`.
+- [ ] Permanent deletion over 1 GB needs a typed confirmation `--yes` cannot bypass.
+- [ ] Every operation has a journal entry with per-item results.
 
-### Дубликаты
-- [ ] Hardlink-набор показан отдельно от дубликатов, с экономией 0.
-- [ ] Cloud-only файлы не хешируются (проверяется отсутствием сетевого трафика).
-- [ ] Невозможно снять отметку с последнего файла в группе (UI и CLI).
-- [ ] Byte-for-byte верификация выполняется перед удалением; подмена файла между хешем и удалением отменяет операцию.
-- [ ] Дубликаты находятся между C: и D:.
+**Duplicates** (all P8)
+- [ ] A hard-link set is shown apart from duplicates, with a saving of 0.
+- [ ] Cloud-only files are never hashed (verified by the absence of network traffic).
+- [ ] The last file in a group cannot be unmarked, in the UI or the CLI.
+- [ ] Byte-for-byte verification runs before deletion; a swapped file aborts it.
+- [ ] Duplicates are found across C: and D:.
 
-### CLI
-- [x] Перенаправление stdout отключает TUI автоматически — при перенаправлении без аргументов печатается `status`.
-- [x] `--json` даёт валидный JSON в stdout и ничего кроме; прогресс/предупреждения в stderr — `scan`, `diff`, `history`, `audit`; тесты на контракт §13.6.
-- [ ] Exit-коды соответствуют §13.5; `EX_UNSAFE` на попытке удалить protected path — `EX_LOCKED`, `EX_NO_DATA`, `EX_USAGE`, `EX_PARTIAL`, `EX_CANCELLED` работают; `EX_UNSAFE` появится с удалением (P6).
-- [ ] `pathmemo top --paths-only | pathmemo rm --from-stdin --dry-run` работает как пайп.
-- [ ] `pathmemo doctor` сообщает: elevated, ФС томов, состояние USN, целостность БД, версию, свободное место — всё, кроме состояния USN (P9): версия схемы, размер БД, число сканов, результат сверки со снимками, `integrity_check` после грязного выхода.
+**CLI**
+- [x] Redirected stdout disables the TUI and prints `status`.
+- [x] `--json` emits valid JSON and nothing else, warnings on stderr — tests on the §13.6 contract.
+- [ ] Exit codes follow §13.5 — all but `EX_UNSAFE`, which arrives with deletion.
+- [ ] `top --paths-only | rm --from-stdin --dry-run` works as a pipe.
+- [ ] `doctor` reports elevation, filesystems, USN state, integrity, version, free space — everything except USN state (P9).
 
-### TUI
-- [x] Работает в Windows Terminal, conhost (cmd.exe), ConEmu, VS Code terminal, PowerShell ISE-эквиваленте — проверено в conhost (запуск из Проводника и из `cmd.exe`); остальные хосты получают тот же ANSI-поток, хост без VT-обработки откатывается на построчное меню, а консоль с растровым шрифтом — на ASCII-глифы (§14.7).
-- [x] Двойной клик из Проводника даёт окно с иконкой, заголовком `pathmemo <версия>`, размером 110×32 и выключенным quick-edit; клик мышью внутри окна не подвешивает отрисовку.
-- [x] `Ctrl+C` работает как стандартная отмена/выход, не как копирование — проверено внутри `cmd.exe`: TUI выходит, скроллбэк цел, следующая команда выполняется.
-- [x] Все действия достижимы одиночными клавишами; ни одно не требует `Ctrl+Shift+*` или `Ctrl+digit` — единственные сочетания с Ctrl это `Ctrl+D`/`Ctrl+U` (страница), у них есть дублёры PageDown/PageUp.
-- [x] Терминал 80×24 полностью пригоден; при меньшем размере — сообщение, а не поломанный вывод — на 80 колонках скрываются бар и счётчик файлов; на 60×17 печатается размер окна и что делать.
-- [x] Ресайз окна перерисовывает корректно — опрос размера в цикле кадров, при изменении весь кадр помечается грязным.
-- [x] Имя файла с `U+202E` отображается без переворота текста.
-- [x] Имя файла из CJK/эмодзи не ломает выравнивание таблицы — тест утверждает, что ни одна строка кадра не шире экрана в колонках.
-- [x] Каталог с 200 тыс. детей открывается за < 50 мс и скроллится плавно — 10–15 мс на 26 тыс. записей настоящего диска, 0.6 мс на кадр при прокрутке.
-- [x] Логи не попадают в stdout при активном TUI — всё, что печатает (скан, audit), выходит из альтернативного буфера; сообщение Ctrl+C из `Main` при активном TUI подавлено.
-- [x] `o` отказывается открывать `.exe`/`.lnk`/`.hta` — отказ до диалога, список из §15.3, тест на `invoice.pdf.exe`.
+**TUI**
+- [x] Works in Windows Terminal, conhost, ConEmu and the VS Code terminal — verified in conhost from Explorer and `cmd.exe`; a host without VT falls back to the line menu, a raster font to ASCII glyphs.
+- [x] A double-click gives an icon, the title `pathmemo <version>`, 110×32 and quick-edit off; clicking inside does not freeze rendering.
+- [x] `Ctrl+C` is a standard cancel — the TUI exits, the scrollback is intact, the next command runs.
+- [x] Every action is a single key; the only Ctrl combinations are `Ctrl+D`/`Ctrl+U`, which have PageDown/PageUp aliases.
+- [x] 80×24 is fully usable; anything smaller gets a message, not broken output; resizing redraws correctly.
+- [x] `U+202E` does not reverse the text, and CJK or emoji names do not break alignment — asserted by a test over every frame row.
+- [x] A 200k-child directory opens in < 50 ms and scrolls smoothly.
+- [x] Logs never reach stdout while the TUI is up.
+- [x] `o` refuses `.exe`, `.lnk` and `.hta` — before the dialog, tested on `invoice.pdf.exe`.
 
-### Гигиена
-- [ ] Каталог данных никогда не превышает 500 МБ (тест: 100 сканов подряд) — правило retention реализовано (§5.4), прогон на 100 сканов не делался.
-- [x] Два экземпляра pathmemo одновременно: второй читает, отказывается писать с `EX_LOCKED` — проверено на настоящей БД с удержанным `BEGIN EXCLUSIVE`: в WAL-режиме чтение вообще не блокируется, а запись отказывается с одним предупреждением, **сохраняя снимок**; `EX_LOCKED` возвращают команды, которым БД обязательна. Терять 10-секундный скан из-за занятой строки истории было бы хуже (§11.1).
-- [x] Некорректное завершение → на следующем старте `integrity_check`, при чистом — не запускается — маркер `.clean`, юнит-тест на оба пути.
-- [x] Повреждённый `.pmsnap` не ломает приложение: скан помечается `snapshot_available=0` — заголовок проверяется при каждой сверке; `history` печатает `deleted`, `diff` отказывается с объяснением.
-- [ ] Повреждённый `config.json` → предупреждение + дефолты, не крэш.
-- [ ] Elevated-запуск игнорирует пути из пользовательского конфига — для `--data-dir` реализовано (предупреждение + игнорирование); `config.json` ещё не читается.
+**Hygiene**
+- [x] Two instances: the second reads and refuses to write — verified against a database held by `BEGIN EXCLUSIVE`; in WAL mode reading is never blocked, and a write refuses with one warning while **still saving the snapshot**. Losing a 10-second scan over a busy history row would be worse.
+- [x] An unclean exit triggers `integrity_check` on the next start, a clean one does not — unit-tested both ways.
+- [x] A corrupted `.pmsnap` does not break the application: `history` prints `deleted`, `diff` refuses with an explanation.
+- [ ] The data directory never exceeds 500 MB (retention is implemented; the 100-scan run is not done).
+- [ ] A corrupted `config.json` gives a warning and defaults, not a crash.
+- [ ] An elevated run ignores config paths — done for `--data-dir`; `config.json` is not read yet.
 
 ---
 
-## 22. Тестирование
+## 22. Testing
 
-### 22.1. Что тестируем юнитами
+### 22.1. What is unit-tested
 
-Только чистую логику без ФС:
-- `RuleEngine` — матчинг глобов, раскрытие переменных, приоритет `keep`.
-- `PathGuard.IsProtected` — на **заранее канонизированных** строках, все 12 вариантов обхода.
-- `NodeStore` / `SnapshotFormat` — round-trip, границы, повреждённые данные.
-- `DiffEngine` — на синтетических снимках.
-- `HardlinkResolver` — на синтетических наборах.
-- *P4:* `SnapshotDiff` — 13 тестов на синтетических деревьях (`TestTree` строит `NodeStore` из списка путей): «объясняющий» уровень, разделение на несколько детей, residual, порог, appeared/disappeared, смена типа имени, hardlink-алиасы, сумма строк плюс остаток = изменению тома. `ScanAggregates` — наследование категории от каталога, срез расширений. `ScanExport` — контракт JSON и кавычки CSV. Хранилище (`Storage`) тестируется на настоящем файле SQLite в `%TEMP%`, а не in-memory: WAL, маркер `.clean` и сверка «файл против строки» существуют только на диске — это и есть предмет тестов. Набор прогоняется последовательно (`DisableTestParallelization`): каталог данных — один статический путь на процесс.
-- Парсеры вывода `DISM`/`vssadmin` — на зафиксированных примерах, включая не-английскую локаль.
-- Форматирование размеров, обрезка путей, расчёт ширины CJK/эмодзи, санитизация bidi.
-- *P5:* терминальный слой — 15 тестов: ширина CJK/эмодзи/комбинирующих знаков, `Fit` ровно в N колонок, санитизация bidi/control/zero-width, строчный diff кадра (повторный кадр не пишет ничего, изменённая строка пишет только себя), порядок «стереть до записи», отключение цвета, масштаб спарклайна. Экран Tree — 14 тестов, которые нажимают клавиши и читают текст кадра: порядок строк, спуск и возврат на ту же строку, смена режима размеров на hardlink-алиасе, фильтр, поиск с переходом в каталог находки, пометки, отказ открывать `.exe`, детали, выравнивание при `U+202E` и CJK, каталог на 200 тыс. записей (кадр рисует ровно страницу), `g`/`G`, сужение до 80 колонок. Кадр проверяется по неокрашенному тексту: утверждения об escape-последовательностях тестировали бы цветовую схему, а не поведение.
+Pure logic, no filesystem: `RuleEngine` (glob matching, variable expansion, `keep` precedence); `PathGuard.IsProtected` over **pre-canonicalised** strings, all twelve bypasses; `NodeStore` / `SnapshotFormat` round trips, boundaries and corrupted data; `DiffEngine` and `HardlinkResolver` over synthetic data; `DISM` and `vssadmin` parsers over fixed samples including non-English locales; size formatting, path truncation, CJK width, bidi sanitisation.
 
-### 22.2. Что тестируем интеграционно на настоящей ФС
+*P4:* `SnapshotDiff` — 13 tests over synthetic trees (`TestTree` builds a `NodeStore` from a list of paths): the explaining level, splitting across children, residual rows, the threshold, appeared/disappeared, a name changing type, hard-link aliases, and rows plus remainder equalling the volume's change. `ScanAggregates` — category inherited from the directory, the extension cut-off. `ScanExport` — the JSON contract and CSV quoting. `Storage` runs against a real SQLite file in `%TEMP%` rather than in-memory: WAL, the `.clean` marker and file-versus-row reconciliation exist only on disk, and they are the subject. The suite runs serially because the data directory is one static path per process.
 
-**Абстракция `IFileSystem` намеренно не вводится.** Вся ценность продукта — в обработке краевых случаев Win32 (reparse points, hardlinks, sparse, long paths, ACL, sharing violations, POSIX-delete), которые фейковая ФС **не может** воспроизвести. Фейк дал бы зелёные тесты и красный прод.
+*P5:* the terminal layer — 15 tests: CJK, emoji and combining-mark widths, `Fit` landing on exactly N columns, sanitisation, frame row diffing (an identical frame writes nothing, a changed row writes only itself), the erase-before-write order, colour suppression, sparkline scaling. The Tree screen — 14 tests that press keys and read the frame: row order, descending and returning to the same row, the size mode on a hard-link alias, the filter, search jumping into the match's directory, marks, refusing `.exe`, details, alignment under `U+202E` and CJK, a 200k-entry directory drawing exactly one page, `g`/`G`, narrowing to 80 columns. Frames are asserted as uncoloured text: assertions about escape sequences would test the colour scheme, not the behaviour.
 
-Тестовый харнесс создаёт в `%TEMP%` реальное дерево:
+### 22.2. What is integration-tested against a real filesystem
+
+**An `IFileSystem` abstraction is deliberately not introduced.** All the value is in Win32 edge cases — reparse points, hard links, sparse files, long paths, ACLs, sharing violations, POSIX delete — which a fake filesystem **cannot** reproduce. A fake would produce green tests and a red production build.
+
+The harness builds a real tree in `%TEMP%`:
+
 ```
 CreateJunction, CreateSymbolicLink, CreateHardLink
-FSCTL_SET_SPARSE + FSCTL_SET_ZERO_DATA        → sparse-файл
-файл с путём длиной 400 символов через \\?\
-файл, открытый с FileShare.None                → sharing violation
-каталог с DENY-ACE для текущего пользователя   → access denied
-имя с U+202E, с CJK, с эмодзи, с control-char
-рекурсивная junction-петля
-файл размером 0
-две ссылки на один файл в разных каталогах
+FSCTL_SET_SPARSE + FSCTL_SET_ZERO_DATA        -> a sparse file
+a 400-character path through \\?\
+a file opened with FileShare.None              -> sharing violation
+a directory with a DENY ACE                    -> access denied
+names with U+202E, CJK, emoji and control characters
+a recursive junction loop, a zero-byte file
+two links to one file in different directories
 ```
-Проверяется: обход, размеры, дедупликация, ошибки, и главное — **что удаление не выходит за пределы дерева**.
 
-### 22.3. Тест гонки для T2
+It checks traversal, sizes, dedup, errors, and above all **that deletion never leaves the tree**.
 
-Отдельный тест: поток A рекурсивно удаляет дерево, поток B в цикле подменяет подкаталог на junction на охраняемый каталог-канарейку. После 10 тыс. итераций канарейка должна быть цела. Без этого теста `HandleTreeDeleter` нельзя считать готовым.
+### 22.3. Race test for T2
 
-### 22.4. Сверка с эталоном
+Thread A deletes a tree recursively while thread B repeatedly swaps a subdirectory for a junction pointing at a guarded canary. After 10k iterations the canary must be intact. Without this test `HandleTreeDeleter` cannot be considered done.
 
-Скрипт сравнения с WizTree (CSV-экспорт) по 50 крупнейшим каталогам, допуск 1%. Запускается вручную перед релизом на 2–3 реальных машинах — синтетика здесь бесполезна.
+### 22.4. Comparison against a reference
 
-### 22.5. Чего не тестируем автоматически
+A script compares a WizTree CSV export over the 50 largest directories, tolerance 1%. Run by hand before a release on two or three real machines — synthetic data is useless here.
 
-Вызов реальных `vssadmin delete shadows`, `DISM /StartComponentCleanup`, `powercfg /h off` — только вручную на ВМ со снапшотом. Такие тесты в CI недопустимы.
+### 22.5. What is not tested automatically
+
+Actually invoking `vssadmin delete shadows`, `DISM /StartComponentCleanup` or `powercfg /h off` — by hand, on a VM with a snapshot. Such tests have no place in CI.
 
 ---
 
-## 23. Глоссарий
+## 23. Glossary
 
-| Термин | Значение |
+| Term | Meaning |
 |---|---|
-| **MFT** | Master File Table — метаданные всех файлов тома NTFS в одном файле. Чтение напрямую даёт полный список файлов на два порядка быстрее обхода. |
-| **USN Journal** | Журнал изменений NTFS. Позволяет узнать, что изменилось с прошлого раза, без обхода. |
-| **Allocated size** | Реально занятое на томе (кластеры, сжатие, sparse). Единственная величина, складывающаяся в «занято». |
-| **Logical size** | Размер потока данных. То, что показывает Проводник в свойствах файла. |
-| **Unique allocated** | Allocated с дедупликацией жёстких ссылок. |
-| **Reclaimable** | Сколько байт реально освободится при удалении данного набора. |
-| **Hard link** | Несколько имён одного физического файла. `WinSxS` состоит из них почти целиком. |
-| **Reparse point** | Junction, symlink, mount point, cloud placeholder. Требует особой обработки при обходе и при удалении. |
-| **Sparse file** | Файл с «дырками»: logical > allocated. Типично для `.vhdx`. |
-| **Cloud placeholder** | Файл OneDrive/Dropbox, данные которого в облаке. Чтение = скачивание. |
-| **VSS / Shadow copy** | Теневая копия тома. Точки восстановления. Обходом ФС не видна. |
-| **WinSxS** | Component store Windows. Чистится только через DISM. |
-| **Snapshot (`.pmsnap`)** | Бинарный слепок дерева файлов одного скана. |
-| **Quarantine** | Промежуточное хранилище удаляемого на том же томе. Освобождает место только после purge. |
-| **Purge** | Физическое удаление карантина — момент, когда место реально освобождается. |
-| **Risk** | Что сломается при удалении: Safe / Caution / Danger. |
-| **Recoverability** | Чего будет стоить вернуть: Instant / Redownload / Rebuild / Irreversible. |
-| **Finding** | Результат одной пробы Space Audit. |
-| **Remedy** | Способ устранить finding: команда, удаление путей, системная настройка. |
-| **Degraded scan** | Скан без прав администратора или на не-NTFS: медленнее и с неполными данными. |
-| **Unaccounted** | Разница между занятым местом тома и всем, что pathmemo сумел объяснить. |
+| **MFT** | Master File Table — the metadata of every file on an NTFS volume, in one file. Reading it directly lists the disk two orders of magnitude faster than walking it. |
+| **USN Journal** | The NTFS change journal: what changed since last time, without a walk. |
+| **Allocated size** | What is really occupied on the volume (clusters, compression, sparse holes). The only quantity that adds up to "used". |
+| **Logical size** | The length of the data stream — what Explorer shows in a file's properties. |
+| **Unique allocated** | Allocated, with hard links deduplicated. |
+| **Reclaimable** | How many bytes deleting a given set actually frees. |
+| **Hard link** | Several names for one physical file. `WinSxS` is almost entirely made of them. |
+| **Reparse point** | Junction, symlink, mount point, cloud placeholder. Needs care when walking and when deleting. |
+| **Sparse file** | A file with holes: logical > allocated. Typical for `.vhdx`. |
+| **Cloud placeholder** | A OneDrive or Dropbox file whose data is in the cloud. Reading it downloads it. |
+| **VSS / shadow copy** | A shadow copy of the volume; restore points. Invisible to a filesystem walk. |
+| **WinSxS** | The Windows component store. Cleaned only through DISM. |
+| **Snapshot (`.pmsnap`)** | A binary image of one scan's file tree. |
+| **Quarantine** | Staging for deleted items on the same volume. Frees space only after a purge. |
+| **Purge** | Physically deleting the quarantine — the moment space is actually freed. |
+| **Risk** | What breaks if this is deleted: Safe / Caution / Danger. |
+| **Recoverability** | What getting it back costs: Instant / Redownload / Rebuild / Irreversible. |
+| **Finding** | The result of one Space Audit probe. |
+| **Remedy** | A way to act on a finding: a command, deleting paths, a system setting. |
+| **Degraded scan** | A scan without administrator rights, or on non-NTFS: slower and incomplete. |
+| **Unaccounted** | The gap between the volume's used space and everything pathmemo could explain. |
 
 ---
 
-## Приложение A: сводка изменений относительно спецификации v2
+## Licence
 
-| Область | v2 | v3 | Причина |
-|---|---|---|---|
-| **Удаление** | только корзина | quarantine / recycle / permanent, с явным показом «освободит сейчас / после purge» | Корзина на том же томе **не освобождает место** — то есть механизм противоречил цели продукта |
-| **Исключения скана** | `C:\Windows`, `Program Files`, `ProgramData`, `node_modules` исключены по умолчанию | список пуст; исключение из учёта отделено от защиты от удаления | Там живёт большинство того, что мы ищем; иначе цифры не сходятся и критерий «±1% к WizTree» невыполним |
-| **Модель данных** | топ-100 файлов и папок в SQLite | полное дерево в бинарном снимке | Без полного дерева нет drill-down — основного способа чистить диск. SQLite построчно дал бы 15+ ГБ истории |
-| **Сканер** | `EnumerateFileSystemEntries`, MFT в Phase 3 | MFT основной, Walk fallback, USN-инкремент | 5 с против 5 мин; MFT видит недоступные по ACL пути и даёт allocated size бесплатно |
-| **Параллелизм** | `Parallel.ForEachAsync` по папкам 2-го уровня, `MaxDOP = CPU` | work-stealing очередь, N по типу носителя | `WinSxS` = 40% файлов → один воркер; на HDD `MaxDOP=CPU` **замедляет** в 2–3 раза |
-| **Размеры** | один «размер» | logical / allocated / unique / reclaimable | Без различения цифры не сходятся с Проводником никогда; `WinSxS` считался бы втрое |
-| **Space Audit** | отсутствует | 20+ проб | VSS, WSL, Docker, WinSxS, Windows Update — обходом ФС не видны, но это самые крупные куски |
-| **Способ очистки** | путь → удалить | Remedy: команда штатного механизма | Удаление `.git\objects`, `WinSxS`, `Windows\Installer` руками ломает систему/репозиторий |
-| **Классификация** | одна ось risk | risk + recoverability | `node_modules` и `.git\objects` не могут быть в одной категории |
-| **Защита путей** | строковый список, хардкод `C:\` | канонизация `GetFinalPathNameByHandle` + KnownFolders | Обходился 12 способами; системный том может быть не C: |
-| **Рекурсивное удаление** | не описано | обход по handle с `RootDirectory` | Подмена на junction в процессе = удаление вне дерева |
-| **`Ctrl+C`** | перехвачен как «копировать» | стандартная отмена; `y` = копировать | SIGINT; плюс Windows Terminal перехватывает сам — событие не дойдёт |
-| **`Ctrl+Shift+C`, `Ctrl+1..6`, `Ctrl+/`** | биндинги | убраны | Перехватываются терминалом или не имеют VT-последовательности |
-| **Хеш** | BLAKE3 + MD5 | XxHash128 + byte-for-byte | IO — узкое место, не хеш; XxHash в коробке; byte-compare даёт абсолютную гарантию |
-| **Кэш хешей** | ключ по пути | ключ по `(volume, fileId, size, mtime)` + LRU | Переименование сбрасывало кэш; не было вытеснения |
-| **Cloud-файлы** | «пропускать» | не хешировать, но учитывать с allocated≈0 | Хеширование placeholder'а **скачивает** его — 200 ГБ трафика вместо освобождения места |
-| **Retention** | 30/180/730 дней | 20 последних + 12 месячных, cap 400 МБ | Инструмент для освобождения места занимал бы 15 ГБ |
-| **`accessed_at`** | хранится и показывается | удалено | `NtfsDisableLastAccessUpdate` включён по умолчанию — данные ложные |
-| **Правила** | regex в конфиге + дубль в БД | глобы, единственный источник — конфиг | Два синтаксиса в одном документе; ReDoS; два источника правды |
-| **Elevated + конфиг** | не рассмотрено | пути не берутся из конфига, проверка DACL | Локальное повышение привилегий через `logFilePath` |
-| **Открыть файл** | `Ctrl+O`, без ограничений | `o`, запрет исполняемых, подтверждение | Запуск малвари из `Downloads` одной клавишей |
-| **Проводник** | `explorer.exe /select,"path"` | `SHOpenFolderAndSelectItems` | Инъекция через кавычку в имени |
-| **Экраны TUI** | 11 | 5 | Размазанная ценность; Settings/Themes/L10n вырезаны |
-| **TUI-библиотека** | Terminal.Gui | свой рендерер | Trimming/AOT, ширина CJK, контроль над деревом |
-| **Проекты** | 6 | 2 | Трение без выгоды для одиночного инструмента |
-| **Зависимости** | Terminal.Gui, Dapper, DbUp, Blake3, WinForms, Serilog, FluentAssertions | по факту на P5 — **только** Microsoft.Data.Sqlite (ни Spectre.Console, ни System.CommandLine не понадобились) | Размер, trimming, путь к AOT |
-| **Размер exe** | ~70 МБ со сжатием | 18–28 МБ без сжатия | Сжатие = +300 мс на каждый запуск CLI-утилиты |
-| **Расписание** | отсутствует | `pathmemo schedule` | Без автоскана история и diff мертвы |
-| **Замер результата** | отсутствует | free space до/после | Единственный способ проверить, что модель размеров не врёт |
+MIT. See [LICENSE](LICENSE).

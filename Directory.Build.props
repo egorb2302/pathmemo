@@ -9,7 +9,10 @@
          instead, by OsGuard. -->
     <TargetFramework>net9.0-windows</TargetFramework>
 
-    <LangVersion>latest</LangVersion>
+    <!-- A fixed version, not "latest": "latest" is whatever the installed SDK happens to
+         offer, so the same source compiles differently on two machines. Raising this is
+         then a deliberate commit rather than a surprise from an SDK update. -->
+    <LangVersion>13.0</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

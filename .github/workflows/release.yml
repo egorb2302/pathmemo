@@ -28,9 +28,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Installs the .NET 9 SDK; global.json is what makes the muxer actually use it.
+      # The runner image also carries a newer SDK, and without the pin `dotnet` would
+      # silently pick that one and compile with a different language version.
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
+
+      - name: Toolchain
+        shell: pwsh
+        run: dotnet --version
 
       # The suite is the gate: a release that fails its own tests should not exist.
       # Integration tests build a real tree in %TEMP% (junctions, hard links, sparse
