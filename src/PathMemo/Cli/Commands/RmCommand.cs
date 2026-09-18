@@ -1,4 +1,6 @@
 using System.Globalization;
+using PathMemo.Analysis;
+using PathMemo.Audit;
 using PathMemo.Cli.Output;
 using PathMemo.Config;
 using PathMemo.Deletion;
@@ -122,6 +124,17 @@ internal static class RmCommand
     {
         var interactive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
 
+        // The risk axis (README section 7.1) applies however the path arrived here. Danger
+        // means "may break the system or an application", and --yes must not be able to
+        // answer that; --force is the flag that says the user meant this one
+        // (README section 13.1).
+        if (engine.RiskOf(plan) is { Risk: Risk.Danger } danger && !options.Force)
+        {
+            Console.Error.WriteLine(
+                $"pathmemo: rule {danger.RuleId} calls this dangerous; add --force to say you meant it");
+            return ExitCode.Unsafe;
+        }
+
         if (engine.NeedsTypedConfirmation(plan))
         {
             var phrase = DeleteEngine.ConfirmationPhrase(plan);
@@ -137,9 +150,13 @@ internal static class RmCommand
 
             if (!interactive)
             {
-                Console.Error.WriteLine(
-                    "pathmemo: permanent deletion of this size needs a typed confirmation, "
-                    + "which --yes does not provide (README section 9.2)");
+                // Two different reasons land here, and telling the user the wrong one
+                // sends them looking for a size threshold that has nothing to do with it.
+                Console.Error.WriteLine(engine.RiskOf(plan) is { Risk: Risk.Danger } judged
+                    ? $"pathmemo: rule {judged.RuleId} calls this dangerous, which needs a typed "
+                      + "confirmation that --yes does not provide (README section 13.1)"
+                    : "pathmemo: permanent deletion of this size needs a typed confirmation, "
+                      + "which --yes does not provide (README section 9.2)");
                 Console.Error.WriteLine($"pathmemo: run with --dry-run and pass the printed --confirm-token, or type '{phrase}' at a terminal");
                 return ExitCode.Unsafe;
             }

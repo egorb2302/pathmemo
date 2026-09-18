@@ -97,7 +97,7 @@ internal sealed class OverviewScreen : ITuiView
             .Add(session.Message, session.MessageStyle));
 
         Draw.Hints(screen, screen.Height - 1,
-            ("up/down", "volume"), ("enter", "browse"), ("3", "audit"),
+            ("up/down", "volume"), ("enter", "browse"), ("3", "audit"), ("4", "reclaim"),
             ("F5", "rescan"), ("?", "help"), ("Q", "quit"));
     }
 

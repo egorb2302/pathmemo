@@ -106,7 +106,10 @@ internal sealed class DeleteEngine(AppConfig config, PathGuard guard)
                 // snapshot, and the guard has already confirmed what it is.
                 if (snapshot is not null && Expected(snapshot, target) is { } expectation)
                 {
-                    var complaint = PathGuard.Verify(target, expectation.Bytes, expectation.Written);
+                    var complaint = target.IsDirectory
+                        ? Moved(expectation.Allocated, measured.Allocated)
+                        : PathGuard.Verify(target, expectation.Bytes, expectation.Written);
+
                     if (complaint is not null)
                     {
                         refusals.Add(new Refusal(target.DisplayPath, complaint));
@@ -209,11 +212,47 @@ internal sealed class DeleteEngine(AppConfig config, PathGuard guard)
     }
 
     /// <summary>
-    /// Whether this plan needs a phrase typed out (README section 9.2). <c>--yes</c> does
-    /// not answer this question; only the user, or a token derived from this exact plan.
+    /// Whether this plan needs a phrase typed out (README sections 9.2, 13.1).
     /// </summary>
+    /// <remarks>
+    /// <c>--yes</c> does not answer this question; only the user, or a token derived from
+    /// this exact plan. Two things ask it: a large permanent deletion, and anything a rule
+    /// calls <see cref="Risk.Danger"/> - "may break the system or an application" is not a
+    /// thing to agree to by having typed a flag earlier in the line.
+    /// </remarks>
     internal bool NeedsTypedConfirmation(DeletePlan plan) =>
-        plan.Mode == DeleteMode.Permanent && plan.TotalBytes >= _config.Delete.RequireTypedConfirmationOverBytes;
+        (plan.Mode == DeleteMode.Permanent && plan.TotalBytes >= _config.Delete.RequireTypedConfirmationOverBytes)
+        || RiskOf(plan).Risk == Risk.Danger;
+
+    /// <summary>
+    /// The strictest reclaim rule anything in this plan matches (README section 7.1).
+    /// </summary>
+    /// <remarks>
+    /// The rules exist to recommend deletions, but their risk axis is worth just as much
+    /// when the path arrived some other way - typed at a prompt, or marked in the tree.
+    /// The rule engine is built once per plan and thrown away: a handful of paths against
+    /// thirty patterns is microseconds, and caching it would mean an edited
+    /// <c>config.json</c> takes effect at some unpredictable later point.
+    /// </remarks>
+    internal (Risk Risk, string? RuleId) RiskOf(DeletePlan plan)
+    {
+        if (plan.IsEmpty) return (Risk.Safe, null);
+
+        var rules = new RuleEngine(RuleSet.For(_config.Rules));
+        var worst = Risk.Safe;
+        string? id = null;
+
+        foreach (var item in plan.Items)
+        {
+            var (risk, rule) = rules.RiskOf(item.DisplayPath, item.IsDirectory);
+            if (risk <= worst) continue;
+
+            worst = risk;
+            id = rule;
+        }
+
+        return (worst, id);
+    }
 
     internal static string ConfirmationPhrase(DeletePlan plan) => $"delete {plan.Items.Count}";
 
@@ -233,15 +272,48 @@ internal sealed class DeleteEngine(AppConfig config, PathGuard guard)
         }
     }
 
-    private static (long Bytes, DateTime? Written)? Expected(SnapshotContents snapshot, GuardedTarget target)
+    private static (long Bytes, long Allocated, DateTime? Written)? Expected(
+        SnapshotContents snapshot, GuardedTarget target)
     {
         var node = TreeQuery.Find(snapshot.Tree, target.DisplayPath);
         if (node == NodeStore.NoNode) return null;
 
         var mtime = snapshot.Tree.Mtime[node];
 
+        // Through SnapshotTime, whose epoch is 2000-01-01 (README section 5.3). Reading
+        // these seconds as a Unix timestamp put every expectation thirty years in the past,
+        // so every file the scan knew about was refused as "modified since the scan".
         return (snapshot.Tree.Logical[node],
-                mtime == 0 ? null : DateTimeOffset.FromUnixTimeSeconds(mtime).UtcDateTime);
+                snapshot.Tree.Allocated[node],
+                mtime == 0 ? null : SnapshotTime.ToDateTime(mtime));
+    }
+
+    /// <summary>
+    /// Whether a directory is materially not the one the scan measured (README section 9.3,
+    /// step 5).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A directory is judged by its total, not by its modification time. An mtime moves
+    /// whenever anything inside is written, which every cache the reclaim rules exist to
+    /// find does constantly; refusing on it would mean <c>reclaim --apply</c> never
+    /// deletes anything (README section 7.3).
+    /// </para>
+    /// <para>
+    /// The total is the number that would actually have misled the user, and the plan has
+    /// just measured it live. A tenth of slack, and a megabyte at the bottom, covers the
+    /// writes a running application does while a person reads the plan.
+    /// </para>
+    /// </remarks>
+    private static string? Moved(long expected, long measured)
+    {
+        if (expected <= 0) return null;
+
+        var difference = Math.Abs(measured - expected);
+        if (difference <= (1 << 20) || difference * 10 <= expected) return null;
+
+        return $"it holds {Cli.Output.SizeFormat.Bytes(measured)} now, not the "
+             + $"{Cli.Output.SizeFormat.Bytes(expected)} the scan measured; rescan first";
     }
 
     /// <summary>

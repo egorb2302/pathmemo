@@ -65,6 +65,7 @@ internal static class TuiHost
         var session = new TuiSession { Report = StatusReport.Collect() };
         var overview = new OverviewScreen();
         var tree = new TreeScreen();
+        var reclaim = new ReclaimScreen();
 
         var color = Environment.GetEnvironmentVariable("NO_COLOR") is null;
         var screen = new Screen(Console.Out, color);
@@ -83,8 +84,7 @@ internal static class TuiHost
             if (screen.Width < MinWidth || screen.Height < MinHeight) TooSmall(screen);
             else
             {
-                ITuiView active = session.Active == ViewKind.Tree ? tree : overview;
-                active.Render(screen, session);
+                Front(session, tree, reclaim, overview).Render(screen, session);
                 session.Modal?.Render(screen, session);
             }
 
@@ -93,20 +93,26 @@ internal static class TuiHost
             if (!KeyReader.TryRead(120, out var key)) continue;
 
             if (session.Modal is { } modal) modal.HandleKey(key, session);
-            else
-            {
-                ITuiView active = session.Active == ViewKind.Tree ? tree : overview;
-                if (!active.HandleKey(key, session)) Global(key, session, tree, overview, ct);
-            }
+            else if (!Front(session, tree, reclaim, overview).HandleKey(key, session))
+                Global(key, session, tree, reclaim, overview, ct);
 
-            if (session.TakeSuspended() is { } work) Suspend(work, session, screen, tree);
+            if (session.TakeSuspended() is { } work) Suspend(work, session, screen, tree, reclaim);
         }
 
         return ExitCode.Ok;
     }
 
-    private static void Global(in TuiKey key, TuiSession session, TreeScreen tree, OverviewScreen overview,
-                               CancellationToken ct)
+    /// <summary>The screen in front. One place decides, so a new screen is one line here.</summary>
+    private static ITuiView Front(TuiSession session, TreeScreen tree, ReclaimScreen reclaim,
+                                    OverviewScreen overview) => session.Active switch
+    {
+        ViewKind.Tree => tree,
+        ViewKind.Reclaim => reclaim,
+        _ => overview,
+    };
+
+    private static void Global(in TuiKey key, TuiSession session, TreeScreen tree, ReclaimScreen reclaim,
+                               OverviewScreen overview, CancellationToken ct)
     {
         if (key.Is('?'))
         {
@@ -139,7 +145,10 @@ internal static class TuiHost
 
         if (key.Is('4'))
         {
-            session.Warn("the reclaim screen arrives with P7");
+            if (!session.EnsureSnapshot()) return;
+
+            session.Active = ViewKind.Reclaim;
+            session.Clear();
             return;
         }
 
@@ -171,7 +180,7 @@ internal static class TuiHost
         {
             // Back, one level at a time: the tree returns to the overview, and the
             // overview has nowhere further to go.
-            if (session.Active == ViewKind.Tree) { session.Active = ViewKind.Overview; session.Clear(); }
+            if (session.Active != ViewKind.Overview) { session.Active = ViewKind.Overview; session.Clear(); }
             else session.Quit = true;
 
             return;
@@ -226,7 +235,8 @@ internal static class TuiHost
     /// <summary>
     /// Hands the terminal back, runs something that prints, and takes it again.
     /// </summary>
-    private static void Suspend(Action work, TuiSession session, Screen screen, TreeScreen tree)
+    private static void Suspend(Action work, TuiSession session, Screen screen, TreeScreen tree,
+                                ReclaimScreen reclaim)
     {
         Active = false;
         VirtualTerminal.LeaveAlternateBuffer();
@@ -248,6 +258,7 @@ internal static class TuiHost
         // What just ran may have produced a new scan, so nothing loaded is trusted.
         session.Reload();
         tree.Reset();
+        reclaim.Reset();
 
         VirtualTerminal.EnterAlternateBuffer();
         KeyReader.Drain();

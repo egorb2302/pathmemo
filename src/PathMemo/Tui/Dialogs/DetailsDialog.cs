@@ -92,6 +92,21 @@ internal sealed class DetailsDialog(int node) : ITuiView
         var badges = Draw.Badges(tree, node);
         if (badges.Length > 0) lines.Add(Field("flags", badges));
 
+        // What the rules make of it, in the place where a person is deciding about one
+        // thing rather than reading a table of thirty (README section 7.1).
+        if (session.Reclaim.For(node) is { } match)
+        {
+            lines.Add(Field("reclaim rule", match.Rule.Id));
+            lines.Add(Field("", $"{ReclaimNames.Of(match.Rule.Risk)} · "
+                              + $"{ReclaimNames.Of(match.Rule.Recoverability)} · {match.Rule.What}"));
+
+            if (match.Rule.Command is { } command)
+                lines.Add(Field("", (match.Rule.Action == ReclaimAction.Command ? "use " : "or ") + command));
+
+            if (match.SharedBytes > 0)
+                lines.Add(Field("", $"{SizeFormat.Bytes(match.SharedBytes)} of it is shared via hard links"));
+        }
+
         var flags = tree.Flags[node];
         if ((flags & NodeFlags.Sparse) != 0)
             lines.Add(Glyphs.Bullet + "sparse or compressed: it occupies less than its logical size");

@@ -21,6 +21,7 @@ internal sealed class TestTree
         internal bool IsFile;
         internal long Bytes;
         internal uint Mtime;
+        internal byte Links = 1;
         internal NodeFlags ExtraFlags;
         internal readonly List<Node> Children = [];
 
@@ -38,13 +39,15 @@ internal sealed class TestTree
     private readonly List<Node> _roots = [];
 
     /// <summary>Adds a file, creating the directories above it.</summary>
-    internal TestTree File(string path, long bytes, NodeFlags flags = NodeFlags.None, uint mtime = 0)
+    internal TestTree File(string path, long bytes, NodeFlags flags = NodeFlags.None, uint mtime = 0,
+                          byte links = 1)
     {
         var node = Locate(path);
         node.IsFile = true;
         node.Bytes = bytes;
         node.ExtraFlags = flags;
         node.Mtime = mtime;
+        node.Links = links;
         return this;
     }
 
@@ -157,7 +160,7 @@ internal sealed class TestTree
         {
             var node = order[i];
             store.NameOffset[i] = names.Intern(node.Name);
-            store.LinkCount[i] = 1;
+            store.LinkCount[i] = node.Links;
             store.Mtime[i] = node.Mtime;
             store.Flags[i] = node.ExtraFlags | (node.IsFile ? NodeFlags.None : NodeFlags.Directory);
 

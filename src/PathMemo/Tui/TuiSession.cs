@@ -10,6 +10,7 @@ internal enum ViewKind
 {
     Overview,
     Tree,
+    Reclaim,
 }
 
 /// <summary>
@@ -50,6 +51,18 @@ internal sealed class TuiSession
     /// list that silently refers to other files is the worst kind of bug (P6).
     /// </summary>
     internal HashSet<int> Marks { get; } = [];
+
+    /// <summary>
+    /// The reclaim rules applied to the loaded snapshot, once the background pass has
+    /// finished (README section 7.2). <see cref="ReclaimIndex.Empty"/> until then, so
+    /// every caller can read it without asking whether it is ready.
+    /// </summary>
+    internal ReclaimIndex Reclaim =>
+        _reclaim is { IsCompletedSuccessfully: true } done ? done.Result : ReclaimIndex.Empty;
+
+    internal bool ReclaimReady => _reclaim is { IsCompleted: true };
+
+    private Task<ReclaimIndex>? _reclaim;
 
     internal ViewKind Active { get; set; } = ViewKind.Overview;
 
@@ -124,6 +137,19 @@ internal sealed class TuiSession
         Snapshot = snapshot;
         ScanId = scanId;
         Marks.Clear();
+
+        // Off the render thread: applying thirty rules to a million nodes is a few hundred
+        // milliseconds, and the frame budget is sixteen (README section 20). The result is
+        // immutable and published by the task, so the screens only ever read it.
+        var tree = snapshot.Tree;
+        _reclaim = Task.Run(() =>
+        {
+            try { return ReclaimIndex.Build(tree); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return ReclaimIndex.Empty;
+            }
+        });
     }
 
     /// <summary>Forgets the loaded tree, so the next screen entry picks up a newer scan.</summary>
@@ -131,6 +157,7 @@ internal sealed class TuiSession
     {
         Snapshot = null;
         ScanId = 0;
+        _reclaim = null;
         Marks.Clear();
         Report = StatusReport.Collect();
     }

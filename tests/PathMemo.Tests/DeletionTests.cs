@@ -351,16 +351,55 @@ public sealed class DeletionTests : IDisposable
     public void Accepts_a_file_the_scan_agrees_about()
     {
         var path = File_("agreed.bin", 1024);
-        var written = new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(path), TimeSpan.Zero)
-            .ToUnixTimeSeconds();
 
-        var tree = new TestTree().File(path, 1024, mtime: (uint)written);
+        // Through SnapshotTime, exactly as a scanner writes it: seconds since 2000, not
+        // since 1970. Writing a Unix timestamp here once made this test agree with a bug
+        // that refused every file the scan knew about (README section 5.3).
+        var written = SnapshotTime.FromDateTime(System.IO.File.GetLastWriteTimeUtc(path));
+
+        var tree = new TestTree().File(path, 1024, mtime: written);
         SnapshotFile.Write(SnapshotStore.PathFor(1), tree.Result(DateTime.UtcNow));
 
         var plan = Engine().Plan(new DeleteRequest { Paths = [path] });
 
         Assert.Single(plan.Items);
         Assert.Empty(plan.Refusals);
+    }
+
+    [Fact]
+    public void A_directory_whose_modification_time_moved_is_still_deletable()
+    {
+        // Every cache the reclaim rules find is written to constantly, so an mtime older
+        // than the scan is the normal case, not a warning (README sections 7.3, 9.3).
+        File_(@"cache\a.bin", 4096);
+        var directory = Path.Combine(_root, "cache");
+
+        var tree = new TestTree().File(Path.Combine(directory, "a.bin"), 4096,
+            mtime: SnapshotTime.FromDateTime(DateTime.UtcNow.AddDays(-3)));
+
+        SnapshotFile.Write(SnapshotStore.PathFor(1), tree.Result(DateTime.UtcNow));
+
+        var plan = Engine().Plan(new DeleteRequest { Paths = [directory] });
+
+        Assert.Single(plan.Items);
+        Assert.Empty(plan.Refusals);
+    }
+
+    [Fact]
+    public void A_directory_that_holds_far_more_than_the_scan_measured_is_refused()
+    {
+        File_(@"grown\big.bin", 8 << 20);
+        var directory = Path.Combine(_root, "grown");
+
+        // The scan saw a few kilobytes here; there are eight megabytes now, and the number
+        // the user decided with is not the number on the disk.
+        var tree = new TestTree().File(Path.Combine(directory, "big.bin"), 4096);
+        SnapshotFile.Write(SnapshotStore.PathFor(1), tree.Result(DateTime.UtcNow));
+
+        var plan = Engine().Plan(new DeleteRequest { Paths = [directory] });
+
+        Assert.Empty(plan.Items);
+        Assert.Contains("rescan", Assert.Single(plan.Refusals).Reason, StringComparison.Ordinal);
     }
 
     // ---- README section 9.2: mode selection -------------------------------------------

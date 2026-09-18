@@ -1,3 +1,4 @@
+using PathMemo.Analysis;
 using PathMemo.Snapshots;
 
 namespace PathMemo.Tui.Terminal;
@@ -57,12 +58,20 @@ internal static class Draw
     /// <summary>
     /// The facts about a node that change what deleting it would mean (README section 14.2).
     /// </summary>
-    internal static string Badges(NodeStore tree, int node)
+    /// <remarks>
+    /// The reclaim rule comes first when there is one, because it is the badge that answers
+    /// a question the user is actually asking - "can this go?" - while the rest answer
+    /// "what is this?" (README section 7.1).
+    /// </remarks>
+    internal static string Badges(NodeStore tree, int node, ReclaimIndex? reclaim = null)
     {
         var flags = tree.Flags[node];
-        if (flags == NodeFlags.None || flags == NodeFlags.Directory) return "";
+        var rule = reclaim?.BadgeFor(node) ?? "";
 
-        var badges = new List<string>(3);
+        if (rule.Length == 0 && (flags == NodeFlags.None || flags == NodeFlags.Directory)) return "";
+
+        var badges = new List<string>(4);
+        if (rule.Length > 0) badges.Add(rule);
         if ((flags & NodeFlags.Reparse) != 0) badges.Add("reparse");
         if ((flags & NodeFlags.HardlinkAlias) != 0) badges.Add("link");
         if ((flags & NodeFlags.CloudOnly) != 0) badges.Add("cloud");

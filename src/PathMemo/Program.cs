@@ -61,6 +61,7 @@ internal static class Program
                 "tree" => TreeCommand.Run(ParseTree(rest)),
                 "top" => TopCommand.Run(ParseTop(rest)),
                 "audit" => AuditCommand.Run(ParseAudit(rest), cancellation.Token),
+                "reclaim" => ReclaimCommand.Run(ParseReclaim(rest), cancellation.Token),
                 "rm" or "delete" => RmCommand.Run(ParseRm(rest), cancellation.Token),
                 "restore" => QuarantineCommands.Restore(ParseOpId(rest)),
                 "purge" => QuarantineCommands.Purge(ParsePurge(rest), cancellation.Token),
@@ -359,6 +360,42 @@ internal static class Program
         return options with { Paths = paths };
     }
 
+    private static ReclaimOptions ParseReclaim(string[] args)
+    {
+        var options = new ReclaimOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--scan": options = options with { ScanId = ArgParse.Id(ArgParse.Value(args, ref i)) }; break;
+                case "--risk": options = options with { Risk = ParseRisk(ArgParse.Value(args, ref i)) }; break;
+                case "--rule": options = options with { RuleId = ArgParse.Value(args, ref i) }; break;
+                case "--min": options = options with { MinBytes = ArgParse.Size(ArgParse.Value(args, ref i)) }; break;
+                case "--limit": options = options with { Limit = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--list" or "--list-rules": options = options with { ListRules = true }; break;
+                case "--json": options = options with { Json = true }; break;
+                case "--dry-run" or "-n": options = options with { DryRun = true }; break;
+                case "--apply": options = options with { Apply = true }; break;
+                case "--mode": options = options with { Mode = ParseMode(ArgParse.Value(args, ref i)) }; break;
+                case "--permanent": options = options with { Mode = Deletion.DeleteMode.Permanent }; break;
+                case "--yes" or "-y": options = options with { Yes = true }; break;
+                case "--force": options = options with { Force = true }; break;
+                case "--keep": options = options with { Keep = ArgParse.Value(args, ref i) }; break;
+                case "--disable": options = options with { Disable = ArgParse.Value(args, ref i) }; break;
+                case "--enable": options = options with { Enable = ArgParse.Value(args, ref i) }; break;
+                default: throw new ArgumentException($"unexpected argument '{args[i]}'");
+            }
+        }
+
+        return options;
+    }
+
+    private static Audit.Risk ParseRisk(string value) =>
+        Analysis.ReclaimNames.TryRisk(value, out var risk)
+            ? risk
+            : throw new ArgumentException($"--risk must be safe, caution or danger, not '{value}'");
+
     private static Deletion.DeleteMode ParseMode(string value) =>
         Deletion.DeleteModes.TryParse(value, out var mode)
             ? mode
@@ -468,6 +505,7 @@ internal static class Program
               tree [<path>]       one level of the last scan, largest first
               top [options]       largest files or directories, with filters
               audit [options]     space no scan can see: restore points, WinSxS, WSL, caches
+              reclaim [options]   what is worth deleting, by rule, with risk and recovery
               rm <path>...        delete, into quarantine by default
               restore <op-id>     put a quarantined operation back
               purge [<op-id>]     free the space a quarantine is holding
@@ -537,6 +575,24 @@ internal static class Program
               The report itself is read-only. Run as administrator to measure
               restore points and the component store.
 
+            reclaim
+              --scan <id>         which stored scan to read (default: newest)
+              --risk <level>      how far to go: safe (default) | caution | danger
+              --rule <id>         the paths behind one rule, with its remedy
+              --list              print the rule set itself, no scan needed
+              --min <size>        ignore matches below this
+              --limit <n>         paths shown with --rule (default 40)
+              --dry-run, -n       the deletion plan and a confirmation token
+              --apply             delete what the ceiling allows, through 'rm'
+              --mode <mode>       quarantine (default) | recycle | permanent
+              --yes, -y           skip the y/n question
+              --force             required for --risk danger
+              --json              machine-readable report
+              --keep <path>       add a path to protect.keep in config.json
+              --disable <rule>    stop a rule appearing;  --enable <rule> undoes it
+              Rules whose remedy is another tool's command (git gc, docker prune) are
+              reported and never deleted, whatever the flags say.
+
             rm
               --mode <mode>       quarantine | recycle | permanent (default: config)
               --permanent         same as --mode permanent
@@ -560,7 +616,7 @@ internal static class Program
               --limit <n>         rows to show (default 20)
 
             Not implemented yet (see README.md for the full command set):
-              reclaim, dupes, errors, export, schedule, config
+              dupes, errors, export, schedule, config
             """);
         return ExitCode.Ok;
     }

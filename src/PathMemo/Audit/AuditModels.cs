@@ -27,7 +27,7 @@ internal enum RemedyKind
     /// <summary>A command line, shown and copied, never run by the audit itself.</summary>
     RunCommand,
 
-    /// <summary>Paths that could be deleted. Deletion itself arrives with P6.</summary>
+    /// <summary>Paths that could be deleted, through <c>audit --apply</c>.</summary>
     DeletePaths,
 
     /// <summary>A Settings page or control panel applet to open.</summary>

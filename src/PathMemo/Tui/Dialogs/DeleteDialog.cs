@@ -1,3 +1,4 @@
+using PathMemo.Analysis;
 using PathMemo.Cli.Commands;
 using PathMemo.Cli.Output;
 using PathMemo.Deletion;
@@ -27,15 +28,18 @@ internal sealed class DeleteDialog : ITuiView
 {
     private readonly DeleteEngine _engine;
     private readonly IReadOnlyList<string> _paths;
+    private readonly DeleteSource _source;
     private DeletePlan _plan;
     private bool _listing;
     private int _scroll;
 
-    internal DeleteDialog(DeleteEngine engine, IReadOnlyList<string> paths, DeleteMode mode)
+    internal DeleteDialog(DeleteEngine engine, IReadOnlyList<string> paths, DeleteMode mode,
+                          DeleteSource source = DeleteSource.Tree)
     {
         _engine = engine;
         _paths = paths;
-        _plan = engine.Plan(new DeleteRequest { Paths = paths, Mode = mode, Source = DeleteSource.Tree });
+        _source = source;
+        _plan = engine.Plan(new DeleteRequest { Paths = paths, Mode = mode, Source = source });
     }
 
     public void Render(Screen screen, TuiSession session)
@@ -83,12 +87,23 @@ internal sealed class DeleteDialog : ITuiView
             rows.Add(new Draw.PanelRow($"{_plan.Refusals.Count} refused by the guard - [L] to see why", Style.Dim));
         }
 
+        // The rule that claims these paths, when one does: "safe - the application
+        // recreates it" is the single most useful sentence at this moment (README section 7.1).
+        if (_engine.RiskOf(_plan) is { RuleId: not null } judged)
+        {
+            rows.Add(new Draw.PanelRow(""));
+            rows.Add(new Draw.PanelRow($"Rule:   {judged.RuleId} ({ReclaimNames.Of(judged.Risk)})",
+                judged.Risk == Audit.Risk.Safe ? Style.Good : Style.Warning));
+        }
+
         if (_engine.NeedsTypedConfirmation(_plan))
         {
             rows.Add(new Draw.PanelRow(""));
             rows.Add(new Draw.PanelRow(
-                $"Permanent and over {SizeFormat.Bytes(_engine.Config.Delete.RequireTypedConfirmationOverBytes)}: "
-                + "you will type the phrase in the console.", Style.Warning));
+                _engine.RiskOf(_plan).Risk == Audit.Risk.Danger
+                    ? "A rule calls this dangerous: you will type the phrase in the console."
+                    : $"Permanent and over {SizeFormat.Bytes(_engine.Config.Delete.RequireTypedConfirmationOverBytes)}: "
+                      + "you will type the phrase in the console.", Style.Warning));
         }
 
         var title = $"Delete {_plan.Items.Count} item{(_plan.Items.Count == 1 ? "" : "s")} · {SizeFormat.Bytes(_plan.TotalBytes)}";
@@ -145,7 +160,7 @@ internal sealed class DeleteDialog : ITuiView
                 _ => DeleteMode.Quarantine,
             };
 
-            _plan = _engine.Plan(new DeleteRequest { Paths = _paths, Mode = next, Source = DeleteSource.Tree });
+            _plan = _engine.Plan(new DeleteRequest { Paths = _paths, Mode = next, Source = _source });
             return true;
         }
 
@@ -161,8 +176,8 @@ internal sealed class DeleteDialog : ITuiView
             {
                 Paths = [.. plan.Items.Select(i => i.DisplayPath)],
                 Mode = plan.Mode,
-                Reason = "from the tree screen",
-            }, CancellationToken.None, DeleteSource.Tree));
+                Reason = _source == DeleteSource.Reclaim ? "from the reclaim screen" : "from the tree screen",
+            }, CancellationToken.None, _source));
 
             return true;
         }

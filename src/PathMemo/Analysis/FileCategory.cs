@@ -6,7 +6,7 @@ namespace PathMemo.Analysis;
 /// <remarks>
 /// These drive the "what is this disk made of" chart, which has to keep working years
 /// after the snapshot itself was dropped by retention. They are a coarse summary, not a
-/// deletion decision: <c>reclaim</c> (P7) classifies by rule with a path and a remedy,
+/// deletion decision: <c>reclaim</c> classifies by rule with a path and a remedy,
 /// never by extension.
 /// </remarks>
 internal enum FileCategory

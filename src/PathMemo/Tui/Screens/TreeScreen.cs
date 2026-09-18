@@ -236,7 +236,7 @@ internal sealed class TreeScreen : ITuiView
         line.Add(TextWidth.Fit(name, nameWidth), isDirectory ? Style.Strong : Style.Plain);
 
         if (badgeRoom > 0)
-            line.Add(TextWidth.Fit(Draw.Badges(tree, node), badgeRoom), Style.Dim);
+            line.Add(TextWidth.Fit(Draw.Badges(tree, node, session.Reclaim), badgeRoom), Style.Dim);
 
         if (counts && isDirectory)
             line.Right(tree.FileCount[node].ToString("N0", CultureInfo.InvariantCulture), Style.Dim);
@@ -279,10 +279,10 @@ internal sealed class TreeScreen : ITuiView
             var index = _scroll + row;
             if (index >= _children.Length) break;
 
-            room = Math.Max(room, Draw.Badges(session.Tree, _children[index]).Length);
+            room = Math.Max(room, Draw.Badges(session.Tree, _children[index], session.Reclaim).Length);
         }
 
-        return room == 0 ? 0 : Math.Min(room + 2, 18);
+        return room == 0 ? 0 : Math.Min(room + 2, 26);
     }
 
     public bool HandleKey(in TuiKey key, TuiSession session)
@@ -355,11 +355,7 @@ internal sealed class TreeScreen : ITuiView
         if (key.Is('d')) return Delete(session, null);
         if (key.Is('D')) return Delete(session, Deletion.DeleteMode.Permanent);
 
-        if (key.Is('K'))
-        {
-            session.Warn("the keep-list arrives with P7, together with the reclaim rules");
-            return true;
-        }
+        if (key.Is('K')) return Keep(session);
 
         if (key.Is('r'))
         {
@@ -507,6 +503,27 @@ internal sealed class TreeScreen : ITuiView
         var engine = Deletion.DeleteEngine.Create();
 
         session.Modal = new Dialogs.DeleteDialog(engine, paths, mode ?? engine.Config.Delete.DefaultMode);
+        return true;
+    }
+
+    /// <summary>
+    /// <c>K</c>: add this path to <c>protect.keep</c> (README sections 7.4, 14.3).
+    /// </summary>
+    /// <remarks>
+    /// Written straight into <c>config.json</c>, because that file is the single source of
+    /// truth for what may be deleted and the guard reads it on the next run. A keep list
+    /// the TUI remembered by itself would be a second answer to the same question.
+    /// </remarks>
+    private bool Keep(TuiSession session)
+    {
+        var node = Current;
+        if (node == NodeStore.NoNode) return true;
+
+        var path = session.Tree.GetPath(node);
+
+        if (ConfigFile.AddKeep(path, out var message)) session.Say(message);
+        else session.Warn(message);
+
         return true;
     }
 

@@ -15,6 +15,7 @@ pathmemo                 # double-click, or run with no arguments: the TUI
 pathmemo scan            # scan every fixed volume
 pathmemo top --min 1GB   # largest files
 pathmemo audit           # where the invisible space went
+pathmemo reclaim         # what is worth deleting, by rule, with risk and recovery
 pathmemo diff            # what changed since the previous scan
 pathmemo rm <path>       # delete, into quarantine by default (restore, purge, ops)
 ```
@@ -33,14 +34,14 @@ Administrator rights are optional but change what the tool can see: with them th
 | P4 | SQLite (schema §11, WAL), history, `diff`, `--format json\|csv`, `--data-dir` | **done** — diff of two 1.6M-node snapshots in 105 ms |
 | P5 | TUI: Overview + Tree, own renderer, `status` | **done** — 0.1–0.6 ms per frame, 56 ms to search 1.58M nodes |
 | P6 | Deletion: PathGuard, HandleTreeDeleter, quarantine, journal, `rm` / `restore` / `purge` / `ops`, `audit --apply` | **done** — canary intact after 10k junction-swap races (19,478 swaps, 114 s) |
-| P7 | Reclaim rules | not started |
+| P7 | Reclaim rules: 31 rules as data, two axes, `reclaim` / `--rule` / `--apply`, keep-list, TUI screen 4 and badges | **done** — 1.2M nodes matched and 1,800 matches guard-checked in 2.5 s |
 | P8 | Duplicates | not started |
 | P9 | USN incremental scan, scheduling | not started |
 | P10 | Polish, NativeAOT | not started |
 
-211 tests green.
+254 tests green.
 
-**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. Deleting works, but the rules that would *recommend* what to delete are P7, and `K` (keep-list) still names its phase. An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20).
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20).
 
 ---
 
@@ -555,22 +556,36 @@ Every match is scored by **reclaimable** (§3.1), not by the sum of sizes:
 ```
 $ pathmemo reclaim --scan 43
 
-  RULE                        MATCHES      SIZE   RECLAIM   RISK     RECOVERY
-  ─────────────────────────────────────────────────────────────────────────────
-  dev.node_modules                 47   18.2 GB   18.2 GB   safe     redownload
-  dev.unity_library                 3   12.4 GB   12.4 GB   safe     rebuild
-  app.browser_cache                 6    4.1 GB    4.1 GB   safe     instant
-  dev.dotnet_artifacts            212    3.8 GB    3.8 GB   safe     rebuild
-  sys.temp                          4    1.9 GB    1.4 GB   safe     instant     (0.5 GB locked)
-  dev.git_gc                        8    2.2 GB    1.6 GB   caution  irreversible → use git gc
-  user.old_installers              23    6.7 GB    6.7 GB   caution  redownload
-  ─────────────────────────────────────────────────────────────────────────────
-  safe only                       273   43.5 GB   43.0 GB
-  including caution               304   52.4 GB   51.3 GB
+  RULE                       MATCHES      SIZE   RECLAIM   RISK     RECOVERY      NOTE
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  dev.node_modules                47   18.2 GB   18.2 GB   safe     redownload    npm ci
+  dev.unity_library                3   12.4 GB   12.4 GB   safe     rebuild
+  app.browser_cache                6    4.1 GB    4.1 GB   safe     instant
+  dev.dotnet_artifacts           212    3.8 GB    3.8 GB   safe     rebuild
+  sys.temp                         4    1.9 GB    1.9 GB   safe     instant       contents only
+  dev.pnpm_store                   1    7.6 GB    1.2 GB   safe     redownload    6.4 GB shared via hard links
+  dev.git_gc                       8    2.2 GB    2.2 GB   caution  irreversible  use git gc --prune=now
+  user.old_installers             23    6.7 GB    6.7 GB   caution  redownload
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  safe only                      273   43.5 GB   37.1 GB
+  including caution              304   52.4 GB   46.0 GB
 
-  pathmemo reclaim --scan 43 --risk safe --dry-run    preview
-  pathmemo reclaim --scan 43 --risk safe --apply      execute
+  pathmemo reclaim --scan 43 --dry-run    preview what would be deleted
+  pathmemo reclaim --scan 43 --apply      quarantine it (37.1 GB)
+  pathmemo reclaim --rule <id>            the paths behind one row
 ```
+
+```
+--scan <id>   which stored scan to read        --dry-run, -n  the plan and a token
+--risk <l>    safe (default) | caution | danger --apply        delete through `rm`
+--rule <id>   the paths behind one rule        --mode <mode>  quarantine | recycle | permanent
+--list        the rule set, no scan needed     --yes, -y      skip the y/n question
+--min <size>  ignore matches below this        --force        required for --risk danger
+--limit <n>   paths shown with --rule          --json         machine-readable (§13.6)
+--keep <path> add to protect.keep              --disable / --enable <rule>
+```
+
+`SIZE` is what the rule found; `RECLAIM` is what deleting it gives back. The note column carries the one fact the two numbers cannot: a command that does the job better, bytes held by hard links, or how many paths the guard has already refused. Every match is opened and put to the guard while the report is built, so a row never promises space that `rm` would then decline to free (§9.3).
 
 ### 7.4. Custom rules and exclusions
 
@@ -590,6 +605,26 @@ Everything lives in `config.json`, the **single source of truth**; the TUI and C
 ```
 
 `keep` holds paths and globs that **never** appear in recommendations and cannot be deleted through pathmemo. `K` in the TUI adds one.
+
+A custom rule accepts every condition a built-in one uses — there is no private back door in the rule language: `id`, `patterns`, `risk`, `recoverability`, `what`, `command`, `kind` (`directory` | `file` | `any`), `minSizeBytes`, `olderThan`, `requiresChild`, `requiresSibling`, `notUnder`, `contentsOnly`. A custom rule whose `id` is a built-in one **replaces** it, which is how one threshold is changed without retyping the table. An entry that will not parse is skipped with a warning naming it, and the rest of the file still applies.
+
+The live paths into the same file: `pathmemo reclaim --keep <path>`, `--disable <rule>`, `--enable <rule>`, and in the TUI `K` — on a rule it disables the rule, on a path it adds that path to `protect.keep`. Edits go through `JsonNode`, so keys pathmemo knows nothing about survive, and the file is written through a temporary and moved into place: a half-written `config.json` is a tool that will not start.
+
+### 7.5. Implementation notes (P7)
+
+- **The two axes are the audit's, not a second copy.** `Risk` and `Recoverability` already existed in `Audit/` from P2 (§6.1); the rules use those enums. Two identical enums in two namespaces is how a `safe` that means different things in two screens gets born.
+- **A third axis was needed after all, and it is not risk.** What the table calls the "right way" splits into three: pathmemo can delete it, another tool must (`git gc`, `docker system prune`), or a person must decide (iPhone backups, disk images). That is `ReclaimAction`, and `Command` and `Manual` rules are **never** acted on, whatever the flags say — `--apply --risk danger --force` still leaves `.git` alone. Risk says how much it hurts if you are wrong; the action says who is allowed to do it at all.
+- **Matching is a prefilter, not thirty globs per node.** The last segment of each pattern goes into one of three buckets: an exact name (`node_modules`, `obj`), an extension (`*.pyc`, `*.log`), or a wildcard (`Cache*`, `thumbcache_*.db`), and even the last is screened by its literal prefix and suffix before a glob runs. A node's full path is built only for a candidate — 1.2M nodes against 31 rules in a few hundred milliseconds, against several seconds for the obvious implementation (§12.2).
+- **A pattern that ends in an extension is about a file.** `**\*.pyc` under a rule that says `kind: any` does not claim a directory somebody named `weird.pyc`. A rule that really means such a directory says `kind: directory`.
+- **Brace alternation is not in the glob syntax.** The `{Debug,Release}` of §7.2 is written as separate patterns. One more metacharacter buys one line of table and costs every reader of every pattern.
+- **Three built-in rules carry a condition §7.2 only implies.** `dev.unity_library` needs both an `ArtifactDB` inside and an `Assets` beside it, or every directory called `Library` on the disk is a Unity project. `dev.venv` needs a `pyvenv.cfg`, or a folder of holiday videos called `venv` is a virtual environment. `sys.old_logs` has a 1 MB floor that §7.2 does not state: without one it matches tens of thousands of two-kilobyte files, and a report nobody can read is the same as no report.
+- **`sys.temp` deletes contents, not the directory.** Windows and half the installed software assume `%TEMP%` exists, and the guard refuses the directory itself anyway (§9.3). `contentsOnly` is a rule flag, and the children are read from the live filesystem rather than from a snapshot that may be days old.
+- **Hard links are counted as shared, always.** A file with more than one link keeps its data until the last name goes, so deleting this one may free nothing. Proving the other links are inside the same set needs file identity, which `.pmsnap` v1 does not carry (§5.3). Every multiply-linked file therefore counts as shared, which understates the gain — an underestimate disappoints, an overestimate is a promise of space that never arrives. It is also right far more often than it looks: a pnpm store hard-linked into live projects genuinely frees nothing.
+- **The guard is consulted while the report is built, not afterwards.** One handle per match, a second or so for the few hundred a real disk produces. A recommendation the guard would refuse is worse than no recommendation: it is a number in the total that never comes. A path that has gone since the scan drops out; one the guard refuses stays, with the reason beside it.
+- **`--apply` is `rm` with a list.** The confirmation, the journal, the mode, the re-check at execution time and the free-space measurement are all the ones from §9, so there is no second deletion path with its own mistakes in it. The journal entry records the rule ids in its reason.
+- **`Risk = Danger` now means something outside reclaim.** Any deletion — typed at a prompt, marked in the tree — whose path matches a `danger` rule needs `--force` **and** the typed confirmation, which `--yes` cannot answer (§13.1). This closes the P6 note that `--force` was only a synonym for `--yes`.
+- **The TUI runs the rules on a background thread.** A frame is budgeted at 16 ms and the rule pass is a few hundred; until it finishes, the badges are simply absent, which is what a node no rule claims would show anyway. That index skips the guard check — it is a per-handle cost behind a screen the user may never open — and the delete dialog does the guarded plan before anything happens.
+- **Two bugs the live runs found, both in P6's verification (§9.3, step 5).** Snapshot timestamps are seconds since 2000-01-01 (§5.3) and the comparison read them as Unix seconds, putting every expectation thirty years in the past: *every* file the scan knew about was refused as "modified since the scan". It went unnoticed because the P6 test stored a Unix timestamp too, so the two mistakes cancelled, and because a file created after the scan has no expectation to disagree with. Second, a directory was judged by its modification time, which moves whenever anything inside is written — that is every cache the rules exist to find. A directory is now judged by its total, which the plan has just measured live, with a tenth of slack.
 
 ---
 
@@ -740,6 +775,8 @@ and a hard-coded `C:\` is wrong to begin with — the system volume need not be 
 
 6. Delete through that same handle (§9.5), never by path.
 ```
+
+*P7:* step 5 applies to a **file** as written. A directory is judged by its total instead, which the plan has just measured live, with a tenth of slack: a directory's modification time moves whenever anything inside it is written, and that is every cache the reclaim rules exist to find (§7.5).
 
 ### 9.4. Quarantine
 
@@ -1112,7 +1149,7 @@ pathmemo status                            last scan plus free space
 pathmemo tree [<path>] [--scan <id>]       tree, largest first, non-interactive
 pathmemo top [options]                     largest files and folders, with filters
 pathmemo audit [--id <finding>] [--apply <finding>]
-pathmemo reclaim [options]                 cleanup recommendations
+pathmemo reclaim [options]                 cleanup recommendations (options: §7.3, §7.4)
 pathmemo dupes [options]                   duplicate search
 pathmemo rm <path>... [options]            deletion (quarantine by default)
 pathmemo restore <op-id>                   restore from quarantine
@@ -1143,6 +1180,8 @@ pathmemo doctor                            rights, USN, filesystem, database, ve
 *P4:* `--data-dir` is stripped from the arguments before the command is parsed, so it works with any of them, and when elevated it warns and is ignored (§12.1). `--json` exists on `scan`, `diff`, `history` and `audit`; `--size` on `tree`, `top` and `diff`.
 
 *P6:* `--yes` works on `rm`, `purge` and `audit --apply`, and never answers the typed confirmation that a large permanent deletion demands - that is what `--confirm-token` is for. `--json` covers `rm`, as a plan before the fact or a result after it.
+
+*P7:* `--force` stops being a synonym for `--yes`. Anything a rule calls `Risk = Danger` — however the path arrived, typed at a prompt or marked in the tree — needs `--force` **and** the typed confirmation, and `--yes` answers neither. `--json` covers `reclaim` too.
 
 *P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `--no-color` is not parsed as an option yet, but `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
 
@@ -1201,7 +1240,7 @@ pathmemo rm <path>...
 
 `--confirm-token` answers "how do you automate a dangerous operation without making `--yes` a skeleton key": the dry run prints a token derived from the exact list of paths and sizes, and if anything changed the token is invalid.
 
-*P6:* all of the above except `--force`, which is accepted as a synonym for `--yes` until the risk axis it belongs to arrives with the reclaim rules in P7. The token is ten base32 characters over the canonical paths, sizes and modification times, sorted - so the same list in another order is the same token, and one extra byte in one file is not. `--permanent` is a spelling of `--mode permanent`, and `pathmemo delete` of `pathmemo rm`.
+*P6:* all of the above except `--force`, which was accepted as a synonym for `--yes` until the risk axis it belongs to arrived in P7 (§13.1). The token is ten base32 characters over the canonical paths, sizes and modification times, sorted - so the same list in another order is the same token, and one extra byte in one file is not. `--permanent` is a spelling of `--mode permanent`, and `pathmemo delete` of `pathmemo rm`.
 
 ### 13.5. Exit codes
 
@@ -1240,7 +1279,7 @@ pathmemo rm <path>...
 
 `1`…`5` switch. Modals: `Details`, `Confirm delete`, `Search`, `Help`, `Sort`.
 
-*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm`. `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in.
+*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm`. `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in. *P7:* `4` is the reclaim screen; only `5` still names its phase.
 
 *P6:* the delete modal is its own view rather than a `Confirm`, because it has state: `Tab` cycles the mode and every line - what it frees now, what it frees on purge, what undo costs - is recomputed from a fresh plan, not patched. `L` lists the items and the guard's refusals. It hands off to the ordinary console to run, where the progress line, the confirmation and the free-space report belong (§14.6).
 
@@ -1267,7 +1306,7 @@ pathmemo rm <path>...
 
 The bar and percentage are relative to the current directory. Badges on the right: the reclaim rule (`safe`, `redownload`), `link` (hard-link alias), `sparse`, `cloud`, `reparse`. Directories and files share one list sorted by size. Virtualisation is mandatory — only visible rows are rendered, and a directory with 200k children must not stutter.
 
-*Implemented in P5:* all of the above except the reclaim badges, which arrive with the rules in P7; `link`, `sparse`, `cloud`, `reparse`, `self` and `partial` are shown. The dirs/files/all filter is on `t`, not `Tab`: `Tab` moves focus in a terminal and the host takes it. The badge column is sized from the visible rows, so where there are no links or sparse files every column goes to names.
+*Implemented in P5:* `link`, `sparse`, `cloud`, `reparse`, `self` and `partial`; *P7* adds the reclaim badge, which reads `safe redownload` rather than one word, because the two axes are the point (§7.1) and it comes first on the row - it answers "can this go?", the others answer "what is this?". The dirs/files/all filter is on `t`, not `Tab`: `Tab` moves focus in a terminal and the host takes it. The badge column is sized from the visible rows, so where there are no links or sparse files every column goes to names.
 
 ### 14.3. Key map
 
@@ -1336,7 +1375,7 @@ Logs go **to a file only**, never to stdout or stderr while the TUI is up. With 
 
 **Search covers the whole snapshot, not the current directory** — otherwise it is useless, because what is being looked for is five levels down. Names are decoded into a `stackalloc` buffer rather than materialised as strings: 1.58M short strings would cost more in collections than the search itself (§17.3). Up to 2000 matches sorted by size; `n`/`N` jump between them, clearing the filter if it hides a hit.
 
-**Marks (`x`, `a`, `X`) are stored as node indices and cleared on any snapshot change:** an index pointing into a different tree is the worst kind of bug for a deletion list. *P6:* `d` and `Shift+D` open the delete dialog for the marks, or for the row under the cursor when there are none. The paths come out of a snapshot that may be days old, and the guard opens and re-checks every one of them - so a stale tree costs a refusal, never the wrong file. `K` still names its phase.
+**Marks (`x`, `a`, `X`) are stored as node indices and cleared on any snapshot change:** an index pointing into a different tree is the worst kind of bug for a deletion list. *P6:* `d` and `Shift+D` open the delete dialog for the marks, or for the row under the cursor when there are none. The paths come out of a snapshot that may be days old, and the guard opens and re-checks every one of them - so a stale tree costs a refusal, never the wrong file. *P7:* `K` writes the path straight into `protect.keep` in `config.json`, because that file is the single source of truth and the guard reads it on the next run (§7.4); on the reclaim screen the same key disables the rule when the cursor is on a rule.
 
 **`o` refuses to launch executables** (§15.3) before any dialog, not "with a warning". Everything else gets a confirmation showing the sanitised name, the real extension and a mark-of-the-web note. `y` confirms, **not** Enter: a dialog that appears under a finger already travelling towards Enter is not a confirmation. The delete dialog inherits the spirit of it - `Enter` proceeds there only after `Tab` and `L` have had the chance to change what proceeding means, and a large permanent deletion still has to be typed out in the console. `e` opens Explorer through `SHParseDisplayName` + `SHOpenFolderAndSelectItems` (§15.2).
 
@@ -1344,7 +1383,7 @@ Logs go **to a file only**, never to stdout or stderr while the TUI is up. With 
 
 **Glyphs follow the console font.** Frames, bars and the sparkline are box-drawing and block characters, which only a TrueType font has, and an old console profile hands a double-click the raster Terminal font. `GetCurrentConsoleFontEx` checks `TMPF_TRUETYPE` once at startup and falls back to ASCII: `#` and `.` in bars, `+`/`-`/`|` in frames, `>` for the cursor. Not a crippled mode — it is how disk utilities looked for twenty years. `PATHMEMO_ASCII=1` forces it, and tests it.
 
-**Deviations from the letter of §14:** the filter is on `t` rather than `Tab`; the audit screen is the line-based one from P2; Enter does not confirm in dialogs; reclaim badges wait for P7.
+**Deviations from the letter of §14:** the filter is on `t` rather than `Tab`; the audit screen is the line-based one from P2; Enter does not confirm in dialogs. *P7:* the reclaim screen has two levels - rules, then the paths behind one rule - rather than a tree, because that is the shape of the decision: a person agrees to "all the node_modules" or picks three of them, never to something in between. `t` there is the risk ceiling rather than the row filter, and marks survive moving between the levels, so marking inside two rules and pressing `d` once is one operation and one journal entry (§9.7).
 
 **Verified live** (conhost, 118×30): screen switching, descending, help, search ("402 matches across 1.58M nodes"), Details, quitting with `Q`; Ctrl+C inside the TUI returns the shell with its scrollback untouched; a window shrunk to 60×17 shows `pathmemo needs 80x24; this window is 60x17` and redraws in full when enlarged. Launched through the shell (the same as a double-click): title `pathmemo 0.1.0`, a 110×32 window, the icon in the title bar and on the taskbar; clicking and dragging inside the window breaks nothing; `PATHMEMO_ASCII=1` gives a fully ASCII frame.
 
@@ -1407,7 +1446,7 @@ Every row is a real scenario, not a theoretical one.
 | T13 | Leaking private data — an export is a full map of the disk: project names, people's names | `--redact` (hashed names, structure and sizes preserved); `logFilePaths: false` by default |
 | T14 | Corrupting our own database on power loss | WAL, `synchronous=NORMAL`, `integrity_check` **only after an unclean exit** |
 | T15 | The tool filling the disk | Binary snapshots of 10–25 MB and a hard 400 MB cap (§5.4) |
-| T16 | Recursive growth — pathmemo scans its own data, grows, scans again | Flagged `SelfData`, excluded from reclaim, undeletable except by `purge` |
+| T16 | Recursive growth — pathmemo scans its own data, grows, scans again | Flagged `SelfData`, excluded from reclaim, undeletable except by `purge`. *P7:* the rule engine skips a `SelfData` node before it looks at its name, so no pattern can reach the store |
 | T17 | The process killed mid-save — `Console.CancelKeyPress` is time-limited | The handler only sets a token; the main thread writes with a timeout; a second `Ctrl+C` is a hard exit (§4.8) |
 | T18 | Symlink loop — `AppData\Local\Application Data` pointing at itself | Reparse points are never entered, plus a depth limit (256 levels; a real `node_modules` chain runs to about 40) |
 | T19 | Deleting in-use files breaks an application | `NumberOfLinks` and sharing checked; `FILE_DISPOSITION_POSIX_SEMANTICS`; a "close <app> first" warning on known rules |
@@ -1428,18 +1467,19 @@ pathmemo/
 │   │   ├── ArgParse.cs            value parsers: sizes, durations, dates, modes
 │   │   ├── Commands/              Scan, Tree, Top, Audit (+ AuditApply), History, Diff,
 │   │   │                          Doctor, Status (+ StatusReport, shared with Overview),
-│   │   │                          Rm, Quarantine (restore / purge / ops)
+│   │   │                          Rm, Quarantine (restore / purge / ops), Reclaim
 │   │   ├── Interactive/           Launcher, Browser, AuditView, ElevationPrompt
 │   │   │                          (line-based fallback for terminals without VT)
 │   │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv),
-│   │                              DeleteReport (plan, outcome, journal)
+│   │                              DeleteReport (plan, outcome, journal),
+│   │                              ReclaimTable (rules, one rule's paths, json)
 │   │
 │   ├── Tui/
 │   │   ├── TuiHost.cs             input loop and render, suspended during a scan
 │   │   ├── TuiSession.cs          snapshot, size mode, marks, ITuiView
 │   │   ├── Terminal/              Screen (frame buffer + row diff), Line, KeyReader,
 │   │   │                          VirtualTerminal, TextWidth, Sanitizer, Draw
-│   │   ├── Screens/               OverviewScreen, TreeScreen
+│   │   ├── Screens/               OverviewScreen, TreeScreen, ReclaimScreen
 │   │   └── Dialogs/               Details, Confirm, Delete, SortMenu, Help
 │   │                              (search is TreeScreen state, not its own file)
 │   │
@@ -1457,7 +1497,10 @@ pathmemo/
 │   │                              NodeStore (SoA), NameBlob, TreeAssembly
 │   │
 │   ├── Analysis/                  TreeQuery, SnapshotDiff (merge join), FileCategory,
-│   │                              ScanAggregates, RuleEngine, ReclaimPlanner, Reconciler
+│   │                              ScanAggregates, Reconciler; ReclaimModels (two axes
+│   │                              plus the action), RuleEngine (prefilter, then match),
+│   │                              ReclaimPlanner (nesting, keep, the guard),
+│   │                              ReclaimIndex (node -> rule, for the screens)
 │   │
 │   ├── Audit/                     IAuditProbe ← justified: ~20 implementations;
 │   │                              AuditRunner; Probes/ (Vss, WinSxS, Wsl, Docker,
@@ -1488,6 +1531,8 @@ pathmemo/
 │   │
 │   └── Config/                    AppPaths, AppConfig (+ DACL check when elevated),
 │                                  PathGlob (one syntax, ** and %VARS%), DefaultRules
+│                                  (the table of §7.2 as data), ConfigFile (the edits
+│                                  K and --keep make, through JsonNode)
 └── tests/PathMemo.Tests/
 ```
 
@@ -1627,6 +1672,7 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 | Space Audit, all probes | < 8 s | **4.1 s** unelevated (21 probes, 175k files in temp); elevated adds DISM, 3–6 s |
 | Diff of two snapshots | < 500 ms | **105 ms** for the merge join on 1.58M and 1.67M node snapshots, 5 ms where one directory changed, plus 405 ms to load both |
 | Importing snapshots into a fresh database | — | **1.6 s** for 4 snapshots (106 MB, 6.5M nodes) |
+| Reclaim rules over a snapshot | < 3 s | **2.5 s** end to end on 1.22M nodes: the process, loading the snapshot, matching 31 rules, and opening a handle per match to ask the guard about all 1,800 of them. The TUI runs the matching alone, on a background thread, so no frame waits for it (§7.5) |
 | Category and extension aggregates | < 500 ms | **330 ms** over 1.58M nodes. The first version took 600 ms and +80 MB of peak: a linear scan of 200 extensions per file and a string per name. Now a hash lookup over a span and stack buffers (§17.3) |
 | RSS during an MFT scan | < 250 MB | an elevated peak measurement is still outstanding |
 | RSS during a walk scan | < 400 MB | **373 MB** peak working set (380 MB at P3, 478 MB with the first aggregates, 535 MB before file ids moved out of `RawEntry`). The live snapshot is 94 MB of that; the rest is transient GC heap |
@@ -1670,6 +1716,17 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] `--dry-run` moves nothing and writes to `dryrun_log`, not `delete_ops`.
 - [x] Permanent deletion over the threshold needs a typed confirmation `--yes` cannot bypass; a script uses the token from a dry run of that exact list.
 - [x] Every operation has a journal entry with per-item results — and no journal means no deletion.
+
+**Reclaim**
+- [x] Every rule of §7.2 is data with two axes and a remedy, and a custom rule can express everything a built-in one does — asserted over the whole built-in set.
+- [x] No built-in rule claims `hiberfil.sys`, `pagefile.sys`, `WinSxS`, `C:\Windows\Installer`, `System Volume Information` or `.git\objects` — the "deliberately not rules" list, asserted as a test.
+- [x] A rule that needs another tool is reported and never deleted, whatever the flags say — `git gc` and `docker system prune` survive `--apply --risk danger --force`.
+- [x] A match inside another match is counted once; the outer one wins, across rules as well as within one.
+- [x] The keep list removes a path from the recommendations entirely, and `K` in the TUI writes it into `config.json` without disturbing the rest of the file.
+- [x] A recommendation the guard would refuse never reaches the total — every match is opened and judged while the report is built.
+- [x] `--apply` goes through `rm`: the guard, the confirmation, the journal and the free-space measurement are the ones from §9 — verified end to end, 7.23 MB predicted and 7.23 MB freed.
+- [x] Risk `danger` needs `--force` plus a typed confirmation, wherever the path came from; exit code 6 without it.
+- [ ] The estimate is within 10% of what a real cleanup frees on a machine with a pnpm store and a Unity project — the hard-link case is deliberately conservative (§7.5) and has not been measured against a real one.
 
 **Duplicates** (all P8)
 - [ ] A hard-link set is shown apart from duplicates, with a saving of 0.
@@ -1716,6 +1773,8 @@ Pure logic, no filesystem: `RuleEngine` (glob matching, variable expansion, `kee
 
 *P6:* the protected set over canonical strings — the sealed-versus-anchor rule, the whitelist inside the blacklist and its anchor, the keep list, `$Recycle.Bin` and `System Volume Information`, the store and the one operation allowed into it. `PathGlob` per segment, `**`, name-only patterns and variable expansion. The confirmation token: same list in another order gives the same token, one byte or one mode different gives another. `AppConfig` — a good file, a broken one, and a file with one nonsense value. The filesystem half is in §22.2.
 
+*P7:* the rules over synthetic trees — 26 tests: a rule matching anywhere, a match inside another match (within a rule and across two), the sibling and child conditions that separate a Unity project from any other `Library` and a virtual environment from a folder of videos, the age and size floors, a veto pattern, a hard-linked file counted as shared, an alias adding a name and no bytes, the keep list, a reparse point never matched, the store never recommended, an extension pattern not claiming a directory, a wildcard inside a segment, which rule wins when two claim a node, the risk ceiling, `RiskOf`, disabled and replaced rules, a custom rule out of `config.json` and a broken one skipped, and two properties of the whole built-in set: every `Command` rule names its command, and none of them claims anything on the "deliberately not rules" list. The reclaim screen — 9 tests that press keys and read the frame, including that the first frame is drawn before the background pass has finished. The filesystem half is in §22.2.
+
 *P5:* the terminal layer — 15 tests: CJK, emoji and combining-mark widths, `Fit` landing on exactly N columns, sanitisation, frame row diffing (an identical frame writes nothing, a changed row writes only itself), the erase-before-write order, colour suppression, sparkline scaling. The Tree screen — 14 tests that press keys and read the frame: row order, descending and returning to the same row, the size mode on a hard-link alias, the filter, search jumping into the match's directory, marks, refusing `.exe`, details, alignment under `U+202E` and CJK, a 200k-entry directory drawing exactly one page, `g`/`G`, narrowing to 80 columns. Frames are asserted as uncoloured text: assertions about escape sequences would test the colour scheme, not the behaviour.
 
 ### 22.2. What is integration-tested against a real filesystem
@@ -1738,6 +1797,8 @@ two links to one file in different directories
 It checks traversal, sizes, dedup, errors, and above all **that deletion never leaves the tree**.
 
 *P6:* the twelve spellings of a protected path, each opened against the real machine, plus the property they rest on — the aliases of one directory canonicalise to one name. A tree deleted around a junction, with the junction's target untouched afterwards. A read-only file. A file another process holds open, unlinked while that handle still reads its data. Quarantine, restore, a restore refused because something took the name back, and purge. A dry run that moves nothing and lands in the right table. The scan-verification refusal, and its opposite. A file whose size is not a whole number of clusters — a regression that once rejected most files. One real item into the Recycle Bin through `IFileOperation`, because the apartment, the sink and the copy engine's own success codes cannot be faked.
+
+*P7:* the three things a synthetic tree cannot show. That the report never promises what the guard refuses: one rule pointed at a name the real system directory also has, with one match it may offer, one the guard refuses and one that has gone since the scan. That a contents-only rule hands over the children and not the directory. That `config.json` survives being edited by `K` and `--keep`: an unknown section is still there afterwards, a second `K` on the same path is not an error, and a rule disabled and enabled again leaves the file as it was.
 
 ### 22.3. Race test for T2
 

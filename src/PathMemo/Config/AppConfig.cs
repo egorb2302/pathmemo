@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
+using PathMemo.Analysis;
+using PathMemo.Audit;
 using PathMemo.Deletion;
 using PathMemo.Platform;
 
@@ -39,6 +41,21 @@ internal sealed record DeleteSettings
 }
 
 /// <summary>
+/// Which cleanup rules are in force, and the user's own (README section 7.4).
+/// </summary>
+internal sealed record RulesSettings
+{
+    /// <summary>Ids of built-in rules that must not appear in recommendations.</summary>
+    internal IReadOnlyList<string> Disabled { get; init; } = [];
+
+    /// <summary>
+    /// Rules from the configuration. One with a built-in id replaces that rule, which is
+    /// how a threshold is changed without retyping the table.
+    /// </summary>
+    internal IReadOnlyList<ReclaimRule> Custom { get; init; } = [];
+}
+
+/// <summary>
 /// <c>config.json</c>, read once (README section 12).
 /// </summary>
 /// <remarks>
@@ -58,6 +75,7 @@ internal sealed class AppConfig
 
     internal ProtectSettings Protect { get; private init; } = new();
     internal DeleteSettings Delete { get; private init; } = new();
+    internal RulesSettings Rules { get; private init; } = new();
 
     /// <summary>Problems found while loading, printed once by the command that needs them.</summary>
     internal IReadOnlyList<string> Warnings { get; private init; } = [];
@@ -108,6 +126,7 @@ internal sealed class AppConfig
             {
                 Protect = ReadProtect(document.RootElement, warnings),
                 Delete = ReadDelete(document.RootElement, warnings),
+                Rules = ReadRules(document.RootElement, warnings),
                 Warnings = warnings,
                 Loaded = true,
             };
@@ -150,6 +169,118 @@ internal sealed class AppConfig
             VerifyBeforeDelete = Boolean(delete, "verifyBeforeDelete", defaults.VerifyBeforeDelete, warnings),
         };
     }
+
+    /// <summary>
+    /// The <c>rules</c> section (README section 7.4).
+    /// </summary>
+    /// <remarks>
+    /// A custom rule that will not parse is skipped with a warning naming it, and the rest
+    /// of the file still applies. The alternative - one typo disabling every rule the user
+    /// wrote - is how configuration files come to be distrusted.
+    /// </remarks>
+    private static RulesSettings ReadRules(JsonElement root, List<string> warnings)
+    {
+        var defaults = new RulesSettings();
+        if (!root.TryGetProperty("rules", out var rules) || rules.ValueKind != JsonValueKind.Object)
+            return defaults;
+
+        var custom = new List<ReclaimRule>();
+
+        if (rules.TryGetProperty("custom", out var list))
+        {
+            if (list.ValueKind != JsonValueKind.Array)
+                warnings.Add("config: 'rules.custom' should be a list of rule objects; ignored");
+            else
+                foreach (var element in list.EnumerateArray())
+                    if (ReadRule(element, warnings) is { } rule) custom.Add(rule);
+        }
+
+        return new RulesSettings
+        {
+            Disabled = Strings(rules, "disabled", defaults.Disabled, warnings),
+            Custom = custom,
+        };
+    }
+
+    private static ReclaimRule? ReadRule(JsonElement element, List<string> warnings)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            warnings.Add("config: a 'rules.custom' entry is not an object; skipped");
+            return null;
+        }
+
+        var id = Text(element, "id");
+        if (id is null)
+        {
+            warnings.Add("config: a 'rules.custom' entry has no 'id'; skipped");
+            return null;
+        }
+
+        var patterns = Strings(element, "patterns", [], warnings);
+        if (patterns.Count == 0)
+        {
+            warnings.Add($"config: rule '{id}' has no patterns; skipped");
+            return null;
+        }
+
+        var risk = Risk.Safe;
+        if (Text(element, "risk") is { } riskText && !ReclaimNames.TryRisk(riskText, out risk))
+            warnings.Add($"config: rule '{id}' has risk '{riskText}'; using safe");
+
+        var recoverability = Recoverability.Rebuild;
+        if (Text(element, "recoverability") is { } recoveryText
+            && !ReclaimNames.TryRecoverability(recoveryText, out recoverability))
+            warnings.Add($"config: rule '{id}' has recoverability '{recoveryText}'; using rebuild");
+
+        var kind = MatchKind.Directory;
+        if (Text(element, "kind") is { } kindText)
+        {
+            kind = kindText.Trim().ToLowerInvariant() switch
+            {
+                "file" => MatchKind.File,
+                "any" => MatchKind.Any,
+                "directory" or "dir" => MatchKind.Directory,
+                _ => Unknown(),
+            };
+
+            MatchKind Unknown()
+            {
+                warnings.Add($"config: rule '{id}' has kind '{kindText}'; using directory");
+                return MatchKind.Directory;
+            }
+        }
+
+        TimeSpan? olderThan = null;
+        if (Text(element, "olderThan") is { } age)
+        {
+            try { olderThan = Cli.ArgParse.Duration(age); }
+            catch (ArgumentException) { warnings.Add($"config: rule '{id}' has olderThan '{age}'; ignored"); }
+        }
+
+        return new ReclaimRule
+        {
+            Id = id,
+            Patterns = patterns,
+            Risk = risk,
+            Recoverability = recoverability,
+            What = Text(element, "what") ?? "a rule from config.json",
+            Command = Text(element, "command"),
+            Kind = kind,
+            MinSizeBytes = Number(element, "minSizeBytes", 0, warnings),
+            OlderThan = olderThan,
+            RequiresChild = Text(element, "requiresChild"),
+            RequiresSibling = Text(element, "requiresSibling"),
+            NotUnder = Strings(element, "notUnder", [], warnings),
+            ContentsOnly = Boolean(element, "contentsOnly", false, warnings),
+            Custom = true,
+        };
+    }
+
+    private static string? Text(JsonElement parent, string name) =>
+        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private static IReadOnlyList<string> Strings(
         JsonElement parent, string name, IReadOnlyList<string> fallback, List<string> warnings)
