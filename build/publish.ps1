@@ -21,7 +21,12 @@ param(
 
     # Packs the exe and the README into dist\pathmemo-<runtime>.zip - the form
     # someone downloads, unpacks and double-clicks (README section 19.1).
-    [switch] $Zip
+    [switch] $Zip,
+
+    # Stamps the build, so `pathmemo --version` and the title bar agree with the
+    # release it came from. The release workflow passes the git tag; a local build
+    # leaves it empty and keeps the number from Directory.Build.props.
+    [string] $Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +52,11 @@ if (-not $NoTrim) {
     $publishArgs += '-p:TrimMode=partial'
 }
 
+if ($Version) {
+    $publishArgs += "-p:Version=$Version"
+    $publishArgs += "-p:InformationalVersion=$Version"
+}
+
 Write-Host "publishing $Runtime -> $outDir" -ForegroundColor Cyan
 & dotnet @publishArgs
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
@@ -59,7 +69,8 @@ Write-Host "  $size MB" -ForegroundColor Green
 Write-Host "  double-click it, or run it with a command - both work (README section 2.1)" -ForegroundColor DarkGray
 
 if ($Zip) {
-    $zipPath = Join-Path $repo "dist\pathmemo-$Runtime.zip"
+    $name = if ($Version) { "pathmemo-$Version-$Runtime" } else { "pathmemo-$Runtime" }
+    $zipPath = Join-Path $repo "dist\$name.zip"
 
     # Staged next to the output rather than in %TEMP%: a profile path containing an 8.3
     # name (C:\Users\MIXPC~1) makes PowerShell read the tilde as the home directory and
@@ -72,6 +83,9 @@ if ($Zip) {
 
     Copy-Item -LiteralPath $exe -Destination $staging
     Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $staging
+
+    $license = Join-Path $repo 'LICENSE'
+    if (Test-Path -LiteralPath $license) { Copy-Item -LiteralPath $license -Destination $staging }
 
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
     Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -CompressionLevel Optimal

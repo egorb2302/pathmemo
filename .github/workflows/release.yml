@@ -1,0 +1,112 @@
+# Builds the downloadable executables and attaches them to a GitHub Release.
+#
+# GitHub Packages is deliberately not used: it hosts package registries (npm,
+# NuGet, Maven, containers) and has no place for a plain .exe, and its NuGet feed
+# demands a personal access token even for public packages - which would mean
+# telling every user to authenticate before they can download a disk tool.
+# Releases are the mechanism for standalone binaries, and they need nothing from
+# the person downloading.
+#
+# Trigger:  git tag v0.2.0 && git push origin v0.2.0
+# Dry run:  Actions -> release -> Run workflow (builds and uploads artifacts,
+#           creates no release).
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write        # only so `gh release create` can attach the files
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # The suite is the gate: a release that fails its own tests should not exist.
+      # Integration tests build a real tree in %TEMP% (junctions, hard links, sparse
+      # files), which the Windows runner allows.
+      - name: Test
+        run: dotnet test -c Release --nologo
+
+      - name: Read the version from the tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = if ($tag -match '^v\d') { $tag.Substring(1) } else { '0.0.0-dev' }
+          "value=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "building $version"
+
+      - name: Publish win-x64
+        shell: pwsh
+        run: ./build/publish.ps1 -Runtime win-x64 -Version ${{ steps.version.outputs.value }} -Zip
+
+      - name: Publish win-arm64
+        shell: pwsh
+        run: ./build/publish.ps1 -Runtime win-arm64 -Version ${{ steps.version.outputs.value }} -Zip
+
+      # Published next to the downloads so anyone can check what they got. A
+      # self-contained exe from an unknown author is exactly the kind of file
+      # people should be able to verify.
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem dist\*.zip | ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+              "$hash  $($_.Name)"
+          }
+          $lines | Set-Content dist\SHA256SUMS.txt -Encoding ascii
+          $lines | ForEach-Object { Write-Host $_ }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pathmemo-${{ steps.version.outputs.value }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+
+      - name: Create the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.value }}"
+          $notes = @"
+          Windows 10 1809 or later, x64 or arm64. No installer and no runtime to
+          install: one file, self-contained.
+
+          1. Download ``pathmemo-$version-win-x64.zip`` (or ``-win-arm64`` on an ARM machine).
+          2. Unpack it anywhere.
+          3. Double-click ``pathmemo.exe``, or run it from a terminal: ``pathmemo scan``, ``pathmemo top --min 1GB``, ``pathmemo audit``.
+
+          Windows will warn that the publisher is unknown - the executable is not
+          code-signed. Choose **More info -> Run anyway**, or check the SHA-256 below
+          against your download first.
+
+          The tool never deletes anything on its own; deletion arrives in a later
+          version, behind an explicit confirmation.
+
+          ``````
+          $(Get-Content dist\SHA256SUMS.txt -Raw)
+          ``````
+          "@
+
+          # Built as one argument array rather than a line-continued command: the
+          # file list is dynamic, and splatting keeps every path one argument.
+          $files = @((Get-ChildItem dist\*.zip).FullName) + @((Get-Item dist\SHA256SUMS.txt).FullName)
+          $ghArgs = @('release', 'create', '${{ github.ref_name }}') + $files +
+                    @('--title', "pathmemo $version", '--notes', $notes)
+
+          gh @ghArgs

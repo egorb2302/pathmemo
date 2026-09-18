@@ -4,7 +4,7 @@ namespace PathMemo.Platform.Native;
 
 /// <summary>
 /// kernel32 imports. Source-generated (<see cref="LibraryImportAttribute"/>) rather than
-/// <c>DllImport</c> so the NativeAOT path stays open (README section 19.3).
+/// <c>DllImport</c> so the NativeAOT path stays open (README section 19.4).
 /// </summary>
 internal static partial class Kernel32
 {
