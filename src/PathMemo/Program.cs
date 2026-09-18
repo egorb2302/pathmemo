@@ -69,6 +69,7 @@ internal static class Program
                 "ops" => ParseOps(rest),
                 "history" => HistoryCommand.Run(ParseHistory(rest)),
                 "diff" => DiffCommand.Run(ParseDiff(rest)),
+                "schedule" => ScheduleCommand.Run(ParseSchedule(rest), cancellation.Token),
                 "doctor" => DoctorCommand.Run(),
                 "status" => StatusCommand.Run(),
                 "--version" or "-V" => PrintVersion(),
@@ -211,6 +212,7 @@ internal static class Program
                 case "--all-volumes": break;   // the default when no path is given
                 case "--scanner": options = options with { Scanner = ParseScanner(ArgParse.Value(args, ref i)) }; break;
                 case "--pause": options = options with { Pause = true }; break;
+                case "--full": options = options with { Full = true }; break;
                 case "--no-elevate": options = options with { NoElevate = true }; break;
                 case "--format": options = options with { Format = ParseFormat(ArgParse.Value(args, ref i)) }; break;
                 case "--output" or "-o": options = options with { Output = ArgParse.Value(args, ref i) }; break;
@@ -226,6 +228,31 @@ internal static class Program
         if (!relaunch.Contains("--pause")) relaunch.Add("--pause");
 
         return options with { Roots = roots, RelaunchArguments = relaunch };
+    }
+
+    private static ScheduleOptions ParseSchedule(string[] args)
+    {
+        var options = new ScheduleOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--weekly":
+                    options = options with { Action = ScheduleAction.Register, Kind = Platform.ScheduleKind.Weekly };
+                    break;
+                case "--daily":
+                    options = options with { Action = ScheduleAction.Register, Kind = Platform.ScheduleKind.Daily };
+                    break;
+                case "--time": options = options with { Time = ArgParse.Time(ArgParse.Value(args, ref i)) }; break;
+                case "--day": options = options with { Day = ArgParse.Day(ArgParse.Value(args, ref i)) }; break;
+                case "--off" or "--remove": options = options with { Action = ScheduleAction.Off }; break;
+                case "--status": options = options with { Action = ScheduleAction.Status }; break;
+                default: throw new ArgumentException($"unexpected argument '{args[i]}'");
+            }
+        }
+
+        return options;
     }
 
     private static Scanning.ScannerKind ParseScanner(string value) => value.ToLowerInvariant() switch
@@ -556,6 +583,7 @@ internal static class Program
               ops [<op-id>]       the deletion journal
               history [options]   list stored scans
               diff [<a> <b>]      what changed between two scans (default: the last two)
+              schedule [options]  run a scan on a timer, so the history has data
               doctor              report what pathmemo can do on this machine
               help                show this help
               --version           print version
@@ -572,6 +600,7 @@ internal static class Program
               --note <text>       label this scan
               --no-save           analyse without storing a snapshot
               --no-elevate        never offer to restart as administrator
+              --full              traverse everything; never use the change journal
               --quiet, -q         suppress the progress line and the elevation prompt
               --pause             wait for Enter before exiting
               --format <kind>     console | json | csv (default console)
@@ -683,8 +712,19 @@ internal static class Program
               <op-id>             the items of one operation
               --limit <n>         rows to show (default 20)
 
+            schedule
+              --weekly            every week (the default when a schedule is asked for)
+              --daily             every day
+              --time HH:MM        when, on a 24-hour clock (default 03:00)
+              --day <name>        which day, with --weekly (default monday)
+              --off               remove the scheduled scan
+              --status            what is registered now (the default with no options)
+              The task runs as you, without a stored password, only when the machine is
+              idle and on AC power. Register it from an administrator prompt and the
+              scheduled scan can use the MFT and the change journal.
+
             Not implemented yet (see README.md for the full command set):
-              errors, export, schedule, config
+              errors, export, config
             """);
         return ExitCode.Ok;
     }

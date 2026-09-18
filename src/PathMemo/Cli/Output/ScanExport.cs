@@ -37,6 +37,12 @@ internal static class ScanExport
         json.WriteString("scanner", ScanRepository.Name(result.Scanner));
         json.WriteBoolean("elevated", (result.Flags & ScanFlags.Elevated) != 0);
         json.WriteBoolean("partial", (result.Flags & ScanFlags.Partial) != 0);
+
+        // Only on an incremental scan, and only added to the object: a reader written
+        // against schema 1 keeps working (README section 13.6).
+        if ((result.Flags & ScanFlags.Incremental) != 0)
+            json.WriteNumber("changedDirectories", result.ChangedDirectories);
+
         json.WriteNumber("totalFiles", result.FileCount);
         json.WriteNumber("totalDirectories", result.DirectoryCount);
         json.WriteNumber("allocatedBytes", result.AllocatedBytes);
@@ -160,6 +166,8 @@ internal static class ScanExport
     {
         var limitations = new List<string>(4);
 
+        if ((flags & ScanFlags.Incremental) != 0)
+            limitations.Add("untouchedDirectoriesCarriedFromThePreviousScan");
         if ((flags & ScanFlags.PartialHardlinkResolution) != 0)
             limitations.Add("hardLinksResolvedOnlyAboveOneMegabyte");
         if ((flags & ScanFlags.NoAdsAccounting) != 0)

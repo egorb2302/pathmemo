@@ -36,12 +36,12 @@ Administrator rights are optional but change what the tool can see: with them th
 | P6 | Deletion: PathGuard, HandleTreeDeleter, quarantine, journal, `rm` / `restore` / `purge` / `ops`, `audit --apply` | **done** — canary intact after 10k junction-swap races (19,478 swaps, 114 s) |
 | P7 | Reclaim rules: 31 rules as data, two axes, `reclaim` / `--rule` / `--apply`, keep-list, TUI screen 4 and badges | **done** — 1.2M nodes matched and 1,800 matches guard-checked in 2.5 s |
 | P8 | Duplicates: five stages, hash cache, `dupes` / `--group` / `--apply`, TUI screen 5 | **done** — stage 0 cut 1.23M files to 8,508 candidates in 0.44 s |
-| P9 | USN incremental scan, scheduling | not started |
+| P9 | USN incremental scan, scheduling | **done** — 337 tests green; the rescan is checked against a full scan of the same real tree, and the elevated journal read is not verified on hardware (§4.5.1) |
 | P10 | Polish, NativeAOT | not started |
 
 296 tests green.
 
-**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6).
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. An incremental rescan needs elevation too, because reading the change journal does — unelevated, every scan is a full one, and `doctor` says so (§4.5.1). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6).
 
 ---
 
@@ -266,6 +266,22 @@ N follows the medium, via `IOCTL_STORAGE_QUERY_PROPERTY` → `StorageDeviceSeekP
 
 The snapshot stores `(VolumeSerial, UsnJournalId, NextUsn)`. On a later scan, `FSCTL_QUERY_USN_JOURNAL` confirms the journal was not reset; `FSCTL_READ_USN_JOURNAL` from the saved USN lists the changed records; those are re-read and aggregates recomputed up the tree. Otherwise a full scan runs. Result: **0.2–2 s** instead of 5, which is what makes history, diff and hourly scheduled scans practical. If the journal is off, the tool suggests `fsutil usn createjournal m=32000000 a=8000000 C:` for the user to run.
 
+#### 4.5.1. Implementation notes (P9)
+
+- **Every record dirties one directory, and that is the whole algorithm.** Created, deleted, renamed, written to, truncated, attributes changed — each of those is a change to the contents of the directory holding the file, and re-enumerating that directory answers all of them at once. So the records are never interpreted: `Reason` is read and ignored, and only `ParentFileReferenceNumber` is collected. `UsnRecords` parses V2 and V3 records (the 128-bit ids of V3 move every offset after them by sixteen bytes; on NTFS the upper half is zero, so both collapse to the same number).
+- **The parent id has to be resolved by the file system, because the snapshot cannot do it.** `.pmsnap` v1 stores no file identity — the same gap that shaped the duplicate search (§5.3, §8.6) — so a reference number cannot be looked up in the tree. `OpenFileById` plus `GetFinalPathNameByHandle`, two syscalls per *distinct changed directory*, answers it; results are cached, so a rescan pays them a few hundred times rather than a few hundred thousand. A reference number that will not open is a directory that has since been deleted, and that is not an error: its removal was recorded against *its* parent, which will be read. The sequence number in the high bits is what makes this safe — a record slot reused by another file fails to open instead of resolving to the wrong path.
+- **Reading the journal is administrator-only, whatever handle you bring.** Measured here, unelevated: a root-directory handle answers `FSCTL_QUERY_USN_JOURNAL` at any access level and fails `FSCTL_READ_USN_JOURNAL` with `ERROR_ACCESS_DENIED`; `\\.\C:` opened with no access or `FILE_READ_ATTRIBUTES` fails the *query* with `ERROR_INVALID_FUNCTION`, because such a handle never reaches NTFS at all (the same trap the `ntfs.metadata` probe documents); `\\.\C:` with `GENERIC_READ` cannot be opened. So the query goes through a directory handle and the read through the volume, and an incremental scan is an elevated path — which pairs it exactly with the MFT scanner. An ordinary user still gets the journal's state from `doctor`, and a plain reason why the rescan will take nine seconds.
+- **`FSCTL_CREATE_USN_JOURNAL` is deliberately absent.** Creating a journal changes the volume, and a tool whose promise is that looking costs nothing does not quietly enable a kernel facility. The command is printed for the user to run, like every other remedy (§6.3).
+- **The watermark is taken before traversal, never after.** A file written while the scan is running may or may not have been seen; a watermark taken at the end would claim it was, and that file would then be invisible to every later scan. Taken first, the worst case is that the next rescan re-reads a directory that had not changed after all.
+- **The rebuild copies what the journal did not mention and reads what it did.** One breadth-first pass produces the new tree, so children stay a contiguous index range (§5.3). A clean directory's children are copied node by node with their **name offsets untouched** — the previous blob is adopted whole and only the changed directories' names are interned, which is what keeps a 1.6M-node rescan from paying 1.6M hash lookups. Directory totals are *recomputed from the leaves* rather than adjusted: a copied directory is emitted with zero and `Aggregate` fills it in. The first version carried the old subtree totals across and then added the children on top, which double-counted every untouched file — caught by the first test that compared a rebuild against a full scan.
+- **A directory with no counterpart in the old tree is walked in full, recursively.** Not an optimisation to skip: moving a folder within one volume emits a single rename record and *nothing at all* for its contents, so "absent from the previous tree" is the only signal that its descendants have never been seen. Verified against a real 7 MB subtree moved in between two scans.
+- **Past 20,000 changed directories it gives up and scans fully.** Each one costs an enumeration; at some point the delta is more work than the traversal, and saying so is cheaper than proving it every time.
+- **What an incremental scan is honest about.** Its flags carry the base scan's limits — they describe the untouched part, which is nearly all of it — plus `Degraded`, `NoAdsAccounting` and `PartialHardlinkResolution`, because the changed directories were read by the walk lister. Hard links are the real cost: the lister finds a link count but the *owner* may sit in a directory this rescan never opened, and a decision made over part of the tree would be worse than the previous scan's, so none is made. The summary says all of it, and `--full` rebuilds from scratch.
+- **Refusals are printed, not hidden.** No previous scan, a cancelled one, a snapshot from before this phase, different roots, a recreated journal, a watermark that has aged out, a journal that went backwards — each prints one line saying which and then scans fully. The difference between a third of a second and nine seconds is something the user is entitled to understand.
+- **An 8.3 scan root is expanded before anything else happens.** `%TEMP%` is `C:\Users\MIXPC~1\AppData\Local\Temp` on the machine this was written on, and the kernel answers a file id with the long form — two spellings that would never match, so nothing would ever look changed. `GetLongPathName` at the point the root is resolved fixes it for the snapshot too, which no longer stores paths no other tool can follow.
+- **A trailing separator is not a second directory.** A scan root is stored as `…\projects\` and the kernel answers `…\projects`; without one key for both, a file created directly in the scan root would never mark it as changed.
+- **What is *not* verified.** The end-to-end elevated rescan — the journal read, the timing, the 0.2–2 s claim — has not been run on real hardware: this build's verification session had no way to elevate. What *is* verified without privilege is everything after the journal: the rebuild is checked against a full walk scan of the same real directory tree, path by path and byte by byte, including a moved-in subtree, a deleted file, a grown file and a directory that filled up. §20 and §21 say so rather than claiming the number.
+
 ### 4.6. What is skipped and what is counted
 
 | Entity | Recurse | Size counted | Why |
@@ -351,6 +367,8 @@ SECTIONS (each compressed independently)
     ERRORS    : ScanError[]
     AGGREGATES: precomputed tops, optional cache
 ```
+
+*As built:* the journal watermarks are **their own section** (`USN`, kind 6) rather than three more fields on each `VOLUMES` entry. That is what keeps the format at version 1 across P9: a reader looks the section up instead of indexing it, so a snapshot written before the section existed still opens and simply cannot be the base of an incremental rescan (§4.5.1). Appending fields to `VOLUMES` would have made every earlier snapshot unreadable — and there were five real ones on the author's disk at the time, which is exactly the situation a format version is supposed to survive. Verified against a 27 MB pre-P9 snapshot: it imports, `history` and `tree` read it, and the next scan over it is a full one with the reason printed.
 
 ### 5.3. NODES: struct-of-arrays
 
@@ -903,6 +921,17 @@ Registered scheduled task "pathmemo weekly scan".
 
 Implemented over `ITaskService` (COM) or `schtasks.exe` with `ArgumentList`: `RunOnlyIfIdle`, `StartWhenAvailable`, `DisallowStartIfOnBatteries`, priority `BELOW_NORMAL`. Registering in the current user's context (no password) means the scan runs unelevated and degraded; when installed elevated, `RunLevel = Highest` is offered for MFT scans.
 
+#### 10.1.1. Implementation notes (P9)
+
+- **A task XML document through `schtasks.exe`, not `ITaskService`.** The four settings that make the task polite — idle only, start when available, not on batteries, below-normal priority — are only expressible in the XML, and the XML costs no COM interop, which is one fewer thing to keep working in a trimmed single-file build (§19.4). Written as UTF-16 with a byte order mark, because the scheduler insists the encoding match its own declaration.
+- **The document is also the interface for reading it back.** `schtasks /Query /FO LIST /V` is translated — its labels and dates are in the display language — and parsing a translation is exactly what §6.3 warns against. `/XML ONE` is not: element names are fixed, so `schedule --status` parses the same shape it writes. What comes back is not byte-identical: the scheduler drops every element that equals a schema default, `Priority` 7 among them. They are written anyway, because a document that states what it wants does not change meaning when a default does.
+- **The scheduler normalises the account to a SID**, so a status line read straight from the XML would say `As: S-1-5-21-2390494320-…`. It is translated back to `DESKTOP-…\MIX PC` for display, and a SID that no longer resolves is printed as it stands.
+- **`InteractiveToken`, so nothing holds a password.** Registered from an ordinary prompt the task asks for `LeastPrivilege` and the scheduled scan walks the disk; registered from an elevated one it asks for `HighestAvailable` and can use the MFT and the change journal. Both cases say which, and how to change it, rather than leaving the user to find out at three in the morning.
+- **A run under `dotnet PathMemo.dll` refuses to register.** `Environment.ProcessPath` is then `dotnet.exe`, and a task pointing at the runtime with no arguments is a task that fails every night. Better to say so.
+- **`--off` is idempotent.** Nothing registered is the state that was asked for, so it is a success with a different sentence.
+- **The document is parsed by hand, and that is not stylistic.** `XDocument` to read nine elements added **8.04 MB** to the trimmed single-file build — 33.61 MB with it against 25.57 MB without, measured both ways — which is a third of the application for one parse of forty lines. Forty lines of `IndexOf` replaced it, scoped to blocks because element names repeat (`Enabled` appears in the trigger and again in the settings, and only the second one means "switched off"). It is not a general XML reader and does not pretend to be: it reads a document this same file wrote, and anything else is no schedule rather than an exception.
+- **Verified live, unelevated:** registered, read back (the scheduler's own XML carries `RunOnlyIfIdle`, `StartWhenAvailable`, `DisallowStartIfOnBatteries`, `IgnoreNew` and the Monday 03:00 trigger), removed, and removed again.
+
 ### 10.2. Diff
 
 ```
@@ -936,7 +965,7 @@ Both snapshots are loaded and walked in step over sorted child names (a merge jo
 - **`UNEXPLAINED` closes the arithmetic.** A remainder below its level's threshold does not become a row, so `GREW + SHRANK` need not match the volume's change. The difference is printed as its own line rather than left as a mystery: on a real pair of scans it was 92 MB out of 917 MB. A reader who adds two columns, gets a third number and stops trusting the tool is right to.
 - **Appeared and disappeared are shown two ways.** Large new (or vanished) entries appear in `GREW`/`SHRANK` tagged `new`/`gone` — otherwise a new 10 GB directory would have no path in the report — while the summary over everything stays a separate block. That count is gathered only where the report descended, and the line underneath says so: a number without its limits is exactly why disk tools are not believed.
 - **Volumes are matched by letter.** A volume present in only one snapshot, or a serial mismatch (same letter, different filesystem), is printed as a `!` row.
-- **Incomparable scanners are called out** — different scanner, elevation, hard-link policy or ADS accounting give four separate warnings ahead of the numbers. On real snapshots an unelevated walk against an MFT scan yields `+1.71 GB C:\$MFT (new)` and `-1.6 GB C:\Windows\WinSxS`, which is visibility, not disk change.
+- **Incomparable scanners are called out** — different scanner, elevation, hard-link policy or ADS accounting give four separate warnings ahead of the numbers. *P9:* an incremental scan is not a third kind of traversal and does not get the "the two scanners see different things" line, which would be false: what it re-read is as good as a walk's and what it did not is an earlier scan's, verbatim. It gets its own sentence saying exactly that instead. On real snapshots an unelevated walk against an MFT scan yields `+1.71 GB C:\$MFT (new)` and `-1.6 GB C:\Windows\WinSxS`, which is visibility, not disk change.
 - **Refusals:** no snapshot, an unreadable snapshot, a `Partial` snapshot — each with its own message and `EX_NO_DATA`. Argument order does not matter: snapshots are sorted by time so growth never reads as shrinkage.
 - **Without arguments** it compares the last two snapshots; with one, that one against the latest. `--limit`, `--min`, `--size`, `--json`.
 - **Cost:** 405 ms to load two 1.6M-node snapshots, 105 ms for the merge join on a real walk/MFT pair, 5 ms where one directory changed. `PATHMEMO_DIAG=1` prints the breakdown to stderr.
@@ -1094,7 +1123,7 @@ Snapshot writing batches 20k rows for aggregates and runs `PRAGMA wal_checkpoint
 - **`integrity_check` only after a dirty exit**, via the `.clean` marker; on a real database it takes milliseconds and never runs in a normal cycle.
 - **`--no-save` writes not one row.** Otherwise a scripted JSON export would quietly fill up the history.
 - **Aggregates.** Eight categories, plus the 250 largest extensions and a `(rest)` row — a full disk has tens of thousands of distinct suffixes. The category is inherited from the directory (`C:\Windows` → system, `node_modules` → cache) and only then taken from the extension: `C:\Windows` is full of `.wav` files that are not the user's media. NTFS metafiles at a volume root are system too, but only at the root — a user file is entitled to be called `$draft`. Computed once per scan and sent to the database, the `By category` block and the JSON alike. On a real C: (walk, 1.22M files, 197 GB): system 62.5 GB, other 49.8, cache 34.5 (613k files), app 34.2, archive 12, source 2.6, media 1.7, document 0.2.
-- **Still NULL:** `metadata_bytes`, `usn_journal_id`, `next_usn` arrive with P9. *P6:* `delete_ops`, `delete_items` and `dryrun_log` are written, and a deletion refuses to run at all when the database cannot be opened (§9.9). *P8:* `file_hashes` and the `dupe_*` tables are written. The hash table is capped at `duplicates.hashCacheMaxEntries` and trimmed oldest-use-first after every run; `dupe_runs` holds one row, because the last duplicate search is a cache and not history (§8.6).
+- **Nothing is NULL by design any more.** *P9:* `usn_journal_id` and `next_usn` are written for every NTFS volume a scan touches, which is what makes the next one incremental (§4.5); `metadata_bytes` is the `$MFT`'s valid data length — **recorded, never subtracted**, because in MFT mode `$MFT` is already a node in the tree, and the column exists so a walk scan's unaccounted gap can still be given a name years later when the snapshot is gone. It is the valid data length alone and not the MFT zone: counting the clusters NTFS reserves for the `$MFT` to grow into put 5.05 GB in the column on a volume whose `$MFT` is 1.71 GB, and reserved clusters are free space. *P6:* `delete_ops`, `delete_items` and `dryrun_log` are written, and a deletion refuses to run at all when the database cannot be opened (§9.9). *P8:* `file_hashes` and the `dupe_*` tables are written. The hash table is capped at `duplicates.hashCacheMaxEntries` and trimmed oldest-use-first after every run; `dupe_runs` holds one row, because the last duplicate search is a cache and not history (§8.6).
 
 ---
 
@@ -1137,6 +1166,8 @@ Snapshot writing batches 20k rows for aggregates and runs `PRAGMA wal_checkpoint
   "export": { "redactPaths": false }
 }
 ```
+
+*P9:* the `scan` section is read, for `useUsnIncremental` alone. The other keys in it belong to behaviour that is not yet configurable, and a key that is read but ignored is worse than one that is not read at all.
 
 ### 12.1. Elevated mode ignores user config for paths
 
@@ -1205,6 +1236,8 @@ pathmemo doctor                            rights, USN, filesystem, database, ve
 *P7:* `--force` stops being a synonym for `--yes`. Anything a rule calls `Risk = Danger` — however the path arrived, typed at a prompt or marked in the tree — needs `--force` **and** the typed confirmation, and `--yes` answers neither. `--json` covers `reclaim` too.
 
 *P8:* `--json` covers `dupes`, and `--yes` there answers the read notice of §8.5 as well as the deletion question. `--paths-only` is on `dupes` too, so `dupes --paths-only | rm --from-stdin` is the same pipe `top` offers.
+
+*P9:* `scan --full` turns off the incremental path for one run. There is no `--incremental`: a rescan is what a scan already is when it can be, and a flag asking for something the journal cannot deliver would only ever produce an error (§4.5.1).
 
 *P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `--no-color` is not parsed as an option yet, but `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
 
@@ -1286,6 +1319,8 @@ pathmemo rm <path>...
 *P6:* `rm --json` emits the plan (with its token and every refusal and its reason) when nothing is to be done or `--dry-run` is given, and the per-item result otherwise.
 
 *P8:* `dupes --json` emits every group with its files, each carrying `keep`, `protected`, `linkCount` and the reason the survivor was chosen, plus a `totals` object that separates duplicates from hard-link sets.
+
+*P9:* an incremental scan adds `changedDirectories` to `scan --json` and one more entry to `limitations`; `scanner` reads `incremental` and the `flags` array carries `incremental`. Both are additions within schema 1, which is what “only ever added” means in practice.
 
 *P4:* the contract is pinned by tests on `scan --format json` and on CSV quoting. The writer is a hand-written `Utf8JsonWriter` with no serializer: reflection is what makes a trimmed build fail at runtime instead of at build time (§18).
 
@@ -1478,6 +1513,7 @@ Every row is a real scenario, not a theoretical one.
 | T18 | Symlink loop — `AppData\Local\Application Data` pointing at itself | Reparse points are never entered, plus a depth limit (256 levels; a real `node_modules` chain runs to about 40) |
 | T19 | Deleting in-use files breaks an application | `NumberOfLinks` and sharing checked; `FILE_DISPOSITION_POSIX_SEMANTICS`; a "close <app> first" warning on known rules |
 | T20 | Concurrent pathmemo processes writing to one database | WAL plus `busy_timeout`, and a refusal to write with a warning while still saving the snapshot. *P4:* no mutex needed — WAL serialises writers, and snapshots use different numbers |
+| T21 | A scheduled task registered with `RunLevel = HighestAvailable` names an executable by path, so whoever can replace that file decides what runs elevated every night | The task is written with the path of the running `pathmemo.exe` and nothing else, so the exe the user chose is the exe that runs; `schedule --status` prints that path in full, and the only way to point it elsewhere is to register again from there. *P9:* a run under the `dotnet` host refuses to register at all, rather than scheduling the runtime |
 
 ---
 ## 17. Code architecture
@@ -1516,7 +1552,10 @@ pathmemo/
 │   │   ├── Mft/                   MftScanner (BFS, hard-link owners), MftParser
 │   │   │                          (fixup, attributes, data runs), MftVolume (\\.\C:,
 │   │   │                          $MFT extents from record 0, positional reads)
-│   │   ├── WalkScanner.cs  ·  FastEnumerator.cs  ·  UsnIncrementalScanner.cs
+│   │   ├── WalkScanner.cs  ·  FastEnumerator.cs
+│   │   ├── UsnJournal.cs            FSCTL query/read, record parsing, file id -> path
+│   │   ├── UsnIncrementalScanner.cs what changed, and whether the journal may be used
+│   │   ├── IncrementalTree.cs       rebuild: copy the untouched, re-read the rest
 │   │   ├── DirectoryWorkQueue.cs  work-stealing
 │   │   └── MediaTypeDetector.cs   HDD/SSD → parallelism
 │   │
@@ -1551,7 +1590,7 @@ pathmemo/
 │   │
 │   ├── Platform/                  Native/ (P/Invoke by DLL), Clipboard, ShellReveal,
 │   │                              FileLaunch, Elevation, KnownFolders, VolumeInfo,
-│   │                              TaskScheduler
+│   │                              ScheduledScan (task XML through schtasks.exe)
 │   │
 │   ├── Storage/                   Database (PRAGMA, user_version, integrity_check),
 │   │                              Schema.sql (embedded, all of §11), ScanCatalog
@@ -1612,11 +1651,11 @@ RSS under 250 MB at a million files is reachable **only** if:
 | Logging | **own `FileLogger`** (~80 lines) | Serilog pulls four packages and reflection for logs we send nowhere |
 | Clipboard | **P/Invoke + OSC 52** | no WinForms (§15.1) |
 | Recycle Bin | **`IFileOperation`**, hand-written COM interop | without `Microsoft.WindowsAPICodePack` |
-| Scheduler | **`ITaskService` COM** or `schtasks` | |
+| Scheduler | **task XML through `schtasks.exe`** | *P9:* the XML is the only place the four settings that matter can be set, and reading it back is the only language-independent way to report the task (§10.1.1). Parsed by hand: `XDocument` for nine elements cost **8.04 MB** of the trimmed build, measured — 33.61 MB with it, 25.57 MB without |
 | Tests | **xUnit** plus integration tests on a real filesystem | §22 |
 | Publishing | **self-contained, single-file, trimmed** | §19 |
 
-Considered and dropped: Terminal.Gui, Dapper, DbUp, Blake3.NET, System.Windows.Forms, FluentAssertions.
+Considered and dropped: Terminal.Gui, Dapper, DbUp, Blake3.NET, System.Windows.Forms, FluentAssertions, and `System.Xml.Linq` — which is in the box and still cost 8 MB.
 
 ### 18.1. Why not Terminal.Gui
 
@@ -1632,7 +1671,7 @@ This project needs **one** complex screen (a virtualised tree), four simple ones
 
 | File | Size | Note |
 |---|---|---|
-| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — and **25.3 MB at P8**, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it |
+| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) |
 | `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
 | `pathmemo-win-x64.zip` | **10.6 MB** | exe + README + LICENSE, built by `build\publish.ps1 -Zip` |
 
@@ -1693,7 +1732,7 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 | Cold start to first frame | < 250 ms | **62 ms** (`--version`), 77 ms when `e_sqlite3` is extracted, once per version |
 | MFT scan of C:, 1.2M records | < 10 s | **9.1–9.6 s** — 1.79M `$MFT` records, 1.27M files / 399k dirs / 209 GB, 175–184k rec/s. The 5 s target has headroom in parallel chunk parsing |
 | Walk scan of C:, 1.2M files | < 150 s | **40–51 s** with hard-link dedup for files ≥ 1 MB (16k handles ≈ 3 s); 41 s without it at P3. The spread is filesystem cache state. Adding a 932 GB HDD costs fifteen minutes more, so every figure here is C: only |
-| Incremental USN scan | < 2 s | typically 0.3 s (P9) |
+| Incremental USN scan | < 2 s | **not measured on hardware.** Reading the journal is administrator-only and the session that built this had no way to elevate (§4.5.1). What is measured is the part after the read: rebuilding a real tree from its changed directories agrees with a full walk scan of the same tree path by path and byte by byte, and copies the untouched nodes without re-interning a single name |
 | Writing a snapshot | < 1.5 s | **26 MB for 1.58M nodes** |
 | Opening an existing snapshot | < 300 ms | **~250 ms**, full decompression; lazy sections are not in yet |
 | Tree navigation, one frame | < 16 ms | **0.08 ms** in an ordinary directory, **0.6 ms** scrolling a 26k-entry one where every row changes; 4–7 ms for the first frame after a load |
@@ -1727,7 +1766,7 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] Unelevated, a relaunch is offered and declining scans degraded with a warning — `[R]/[C]/[Q]` only with a TTY; scripts get stderr.
 - [x] exFAT, FAT32 and network drives fall back to the walk scanner, per volume, trees spliced.
 - [x] Unreadable paths land in `scan_errors`, grouped; in MFT mode their size is known — MFT sees 53k more files and 38k more directories than an unelevated walk.
-- [ ] A rescan uses USN and finishes in < 2 s.
+- [ ] A rescan uses USN and finishes in < 2 s — built, and every part of it that does not need administrator rights is tested: the record parser over synthetic buffers, the refusal rules, and the rebuild against a full scan of the same real tree. The journal read itself, and therefore the timing, is unverified on hardware (§4.5.1).
 - [ ] `Ctrl+C` saves a partial result as `cancelled`; a second exits immediately.
 - [ ] A junction causes no recursion; the point shows with `reparse` and size 0.
 - [ ] The data directory is visible with a `self` badge.
@@ -1771,7 +1810,7 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] `--json` emits valid JSON and nothing else, warnings on stderr — tests on the §13.6 contract.
 - [x] Exit codes follow §13.5 — `EX_UNSAFE` is what a guard refusal and a stale token return.
 - [x] `top --paths-only | rm --from-stdin --dry-run` works as a pipe.
-- [ ] `doctor` reports elevation, filesystems, USN state, integrity, version, free space — everything except USN state (P9).
+- [x] `doctor` reports elevation, filesystems, USN state, integrity, version, free space — the `CHANGE JOURNAL` block names each NTFS volume's journal, its size, its next USN and whether the next scan can be incremental, with the reason when it cannot. Verified unelevated on a two-volume machine.
 
 **TUI**
 - [x] Works in Windows Terminal, conhost, ConEmu and the VS Code terminal — verified in conhost from Explorer and `cmd.exe`; a host without VT falls back to the line menu, a raster font to ASCII glyphs.
@@ -1808,6 +1847,8 @@ Pure logic, no filesystem: `RuleEngine` (glob matching, variable expansion, `kee
 
 *P8:* the survivor rules over paths alone — a keep match beating everything, a hard-linked file beating an ordinary one, `Downloads` losing to anywhere else, then depth, then date; and the invariant, which refuses both a group with every copy marked and a marked path the keep list claims. The duplicates screen — 11 tests that press keys and read the frame: the order, the marks the screen opens with, marking the last copy being refused, a hard-link set hidden until `t`, `K` writing the configuration and unmarking, and `d` re-checking before it offers a dialog. The rest of the module needs real files and is in §22.2.
 
+*P9:* the journal's records over synthetic buffers — a V2 record, a V3 record with its 128-bit ids, several in one buffer, a record reaching past the returned bytes (the earlier ones kept, the watermark still returned), a version this build does not know stepped over by its own length, a record claiming no length stopping the walk rather than spinning, and a buffer holding only the header. The refusal rules: no previous scan, a cancelled one, a snapshot with no watermark, a base that covered other roots. The rebuild over a fake disk that records which directories were opened — an untouched one is never opened at all, a file added, deleted or grown changes every total above it, a subtree moved in is walked in full although only its parent was named, a directory that cannot be read is unknown rather than empty, a reparse point is counted and not entered, children stay one contiguous range, and the untouched part keeps the name offsets it had. The name blob's seeding constructor, the watermark's snapshot round trip, and the scheduled task: the four settings that make it polite, a weekly schedule naming its day, the document read back as what was written, an ampersand in the install path, and something that is not a task document being no schedule rather than a crash. `--time` on a 24-hour clock whatever the locale, and `--day` in any case.
+
 *P5:* the terminal layer — 15 tests: CJK, emoji and combining-mark widths, `Fit` landing on exactly N columns, sanitisation, frame row diffing (an identical frame writes nothing, a changed row writes only itself), the erase-before-write order, colour suppression, sparkline scaling. The Tree screen — 14 tests that press keys and read the frame: row order, descending and returning to the same row, the size mode on a hard-link alias, the filter, search jumping into the match's directory, marks, refusing `.exe`, details, alignment under `U+202E` and CJK, a 200k-entry directory drawing exactly one page, `g`/`G`, narrowing to 80 columns. Frames are asserted as uncoloured text: assertions about escape sequences would test the colour scheme, not the behaviour.
 
 ### 22.2. What is integration-tested against a real filesystem
@@ -1832,6 +1873,8 @@ It checks traversal, sizes, dedup, errors, and above all **that deletion never l
 *P6:* the twelve spellings of a protected path, each opened against the real machine, plus the property they rest on — the aliases of one directory canonicalise to one name. A tree deleted around a junction, with the junction's target untouched afterwards. A read-only file. A file another process holds open, unlinked while that handle still reads its data. Quarantine, restore, a restore refused because something took the name back, and purge. A dry run that moves nothing and lands in the right table. The scan-verification refusal, and its opposite. A file whose size is not a whole number of clusters — a regression that once rejected most files. One real item into the Recycle Bin through `IFileOperation`, because the apartment, the sink and the copy engine's own success codes cannot be faked.
 
 *P7:* the three things a synthetic tree cannot show. That the report never promises what the guard refuses: one rule pointed at a name the real system directory also has, with one match it may offer, one the guard refuses and one that has gone since the scan. That a contents-only rule hands over the children and not the directory. That `config.json` survives being edited by `K` and `--keep`: an unknown section is still there afterwards, a second `K` on the same path is not an error, and a rule disabled and enabled again leaves the file as it was.
+
+*P9:* the rebuild against the real thing, which is the test that decides whether the feature is trustworthy — the claim an incremental scan makes is not "it is fast" but "it says what a full scan would say". A real tree is scanned in full, changed (a file added, one deleted, one grown, and a 7 MB subtree moved in from outside), then rebuilt from the directories a journal record would have named, and the two trees are compared path by path, byte by byte and file by file. Plus: an untouched directory keeping the size the full scan gave it, an empty directory that filled up, the allocated size of a re-read file matching a full scan's for a one-byte file as well as a large one — not "logical rounded up to a cluster", because a one-byte file's data lives inside its own MFT record and occupies no clusters at all — and the contiguous-children invariant holding across a rebuild. None of it needs administrator rights, which is the point: the journal read is the only part that does.
 
 *P8:* the whole funnel against real files — three copies of one file becoming one group that gives back two; two files of one size that differ; a size nothing shares never being opened at all; a hard-link set through `CreateHardLink`, apart from the duplicates and freeing nothing; a real copy beside a hard-link set still being a duplicate; the byte-for-byte stage splitting a group a hash had agreed about, including the counter that says it happened; the re-check refusing the whole operation after one copy is edited, and refusing a name out of a hard-link set; the hash cache answering a second run without reading the files, and the same groups coming out of it; a run stored and read back with its totals, and a second run replacing the first; and `sha256` finding what `xxh128` finds. Cloud placeholders are tested through a snapshot that claims them, because a real one needs a cloud provider and would be a test of OneDrive.
 

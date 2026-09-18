@@ -55,6 +55,24 @@ internal enum ScanErrorKind
 
 internal sealed record ScanError(string Path, ScanErrorKind Kind, int Win32Code, string Message);
 
+/// <summary>
+/// Where one volume's change journal stood when a scan started (README section 4.5).
+/// </summary>
+/// <remarks>
+/// <para>
+/// All three parts matter. The serial says which volume this is, so a letter reassigned to
+/// another disk cannot be rescanned incrementally. The journal id says it is the same
+/// journal - deleting and recreating one restarts numbering from zero, and a saved USN
+/// would then point into a different history. <see cref="NextUsn"/> is the watermark: every
+/// record at or after it is a change this scan has not accounted for.
+/// </para>
+/// <para>
+/// Captured before traversal begins, never after. A file written while the scan was running
+/// may or may not have been seen, and a watermark taken at the end would promise it was.
+/// </para>
+/// </remarks>
+internal sealed record UsnState(string Letter, uint Serial, ulong JournalId, long NextUsn);
+
 internal sealed record ScanRequest
 {
     /// <summary>Roots to traverse. Empty means every ready fixed volume.</summary>
@@ -69,6 +87,9 @@ internal sealed record ScanRequest
     internal IReadOnlyList<string> Exclude { get; init; } = [];
 
     internal string? Note { get; init; }
+
+    /// <summary>Ignore the change journal and traverse everything (<c>scan --full</c>).</summary>
+    internal bool Full { get; init; }
 }
 
 internal sealed record ScanProgress
@@ -96,6 +117,15 @@ internal sealed record ScanResult
     internal required NodeStore Tree { get; init; }
     internal required IReadOnlyList<ScanError> Errors { get; init; }
     internal string? Note { get; init; }
+
+    /// <summary>
+    /// Journal watermarks taken before traversal, one per volume that has a journal. Empty
+    /// when no volume had one, which is what makes the next scan a full one.
+    /// </summary>
+    internal IReadOnlyList<UsnState> Usn { get; init; } = [];
+
+    /// <summary>Directories re-read by an incremental scan; 0 for a full traversal.</summary>
+    internal int ChangedDirectories { get; init; }
 
     internal int TotalNodes => Tree.Count;
 

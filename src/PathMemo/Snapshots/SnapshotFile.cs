@@ -14,6 +14,12 @@ internal enum SectionKind : uint
     Volumes = 3,
     Errors = 4,
     Roots = 5,
+
+    /// <summary>
+    /// Change journal watermarks (README section 4.5). Added in P9 and optional: a
+    /// snapshot written before it simply cannot be the base of an incremental rescan.
+    /// </summary>
+    Usn = 6,
 }
 
 /// <summary>
@@ -53,6 +59,7 @@ internal static class SnapshotFile
             (SectionKind.Roots, MemoryMarshal.AsBytes<int>(tree.Roots).ToArray()),
             (SectionKind.Volumes, PackVolumes(result.Volumes)),
             (SectionKind.Errors, PackErrors(result.Errors)),
+            (SectionKind.Usn, PackUsn(result.Usn)),
         };
 
         var stored = new List<(SectionKind Kind, uint Compression, int RawLength, byte[] Bytes)>();
@@ -170,6 +177,11 @@ internal static class SnapshotFile
             Tree = tree,
             Volumes = UnpackVolumes(payloads[SectionKind.Volumes]),
             Errors = UnpackErrors(payloads[SectionKind.Errors]),
+
+            // Looked up rather than indexed: every section added after v1 has to be
+            // optional, or opening yesterday's snapshot would throw instead of simply
+            // meaning "no incremental rescan from this one" (README section 5.2).
+            Usn = payloads.TryGetValue(SectionKind.Usn, out var usn) ? UnpackUsn(usn) : [],
             Scanner = scanner,
             Flags = flags,
             StartedUtc = startedUtc,
@@ -298,6 +310,39 @@ internal static class SnapshotFile
         return volumes;
     }
 
+    private static byte[] PackUsn(IReadOnlyList<UsnState> states)
+    {
+        using var memory = new MemoryStream();
+        using var w = new BinaryWriter(memory, Encoding.UTF8, leaveOpen: true);
+
+        w.Write(states.Count);
+        foreach (var state in states)
+        {
+            w.Write(state.Letter);
+            w.Write(state.Serial);
+            w.Write(state.JournalId);
+            w.Write(state.NextUsn);
+        }
+
+        w.Flush();
+        return memory.ToArray();
+    }
+
+    private static IReadOnlyList<UsnState> UnpackUsn(byte[] bytes)
+    {
+        if (bytes.Length < sizeof(int)) return [];
+
+        using var memory = new MemoryStream(bytes);
+        using var r = new BinaryReader(memory, Encoding.UTF8);
+
+        var count = r.ReadInt32();
+        var states = new List<UsnState>(count);
+        for (var i = 0; i < count; i++)
+            states.Add(new UsnState(r.ReadString(), r.ReadUInt32(), r.ReadUInt64(), r.ReadInt64()));
+
+        return states;
+    }
+
     private static byte[] PackErrors(IReadOnlyList<ScanError> errors)
     {
         using var memory = new MemoryStream();
@@ -352,6 +397,13 @@ internal sealed record SnapshotContents
     internal required NodeStore Tree { get; init; }
     internal required IReadOnlyList<VolumeInfo> Volumes { get; init; }
     internal required IReadOnlyList<ScanError> Errors { get; init; }
+
+    /// <summary>
+    /// Journal watermarks, or empty for a snapshot written before P9 or on a volume
+    /// without a journal (README section 4.5).
+    /// </summary>
+    internal IReadOnlyList<UsnState> Usn { get; init; } = [];
+
     internal required ScannerKind Scanner { get; init; }
     internal required ScanFlags Flags { get; init; }
     internal required DateTime StartedUtc { get; init; }

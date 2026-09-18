@@ -249,7 +249,21 @@ internal static class DiffCommand
     {
         var warnings = new List<string>();
 
-        if (before.Scanner != after.Scanner)
+        // An incremental scan is not a third kind of traversal and saying "the scanners see
+        // different things" about it would be wrong: the part it re-read is as good as a
+        // walk's, and the part it did not is an earlier scan's, verbatim. That is a
+        // different caveat, and it is the one worth printing (README section 4.5).
+        var incremental = new List<long>(2);
+        if (before.Scanner == ScannerKind.Incremental) incremental.Add(diff.BeforeId);
+        if (after.Scanner == ScannerKind.Incremental) incremental.Add(diff.AfterId);
+
+        foreach (var id in incremental)
+        {
+            warnings.Add($"scan {id} was built from the change journal, so directories it did not "
+                       + "re-read carry the numbers of the scan before it");
+        }
+
+        if (before.Scanner != after.Scanner && incremental.Count == 0)
         {
             warnings.Add($"scan {diff.BeforeId} used the {Name(before.Scanner)} scanner and scan {diff.AfterId} the "
                        + $"{Name(after.Scanner)} one: part of what follows is a difference in what the scanners see, not on disk");

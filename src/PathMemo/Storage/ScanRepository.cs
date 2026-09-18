@@ -137,9 +137,9 @@ internal sealed class ScanRepository(Database database)
         using var command = _db.Command("""
             INSERT INTO scan_volumes (scan_id, letter, label, filesystem, volume_serial, volume_guid,
                                       cluster_bytes, total_bytes, free_bytes, scanned_bytes,
-                                      unaccounted_bytes)
+                                      metadata_bytes, unaccounted_bytes, usn_journal_id, next_usn)
             VALUES ($id, $letter, $label, $fs, $serial, $guid, $cluster, $total, $free, $scanned,
-                    $unaccounted)
+                    $metadata, $unaccounted, $journal, $usn)
             ON CONFLICT(scan_id, letter) DO NOTHING
             """);
         command.Transaction = transaction;
@@ -155,6 +155,9 @@ internal sealed class ScanRepository(Database database)
             var wholeVolume = volume.Root.TrimEnd(Path.DirectorySeparatorChar).Length <= 2;
             var unaccounted = wholeVolume ? (long)volume.UsedBytes - scanned : (long?)null;
 
+            var journal = result.Usn.FirstOrDefault(
+                u => u.Letter.Equals(volume.Letter, StringComparison.OrdinalIgnoreCase));
+
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$id", id);
             command.Parameters.AddWithValue("$letter", volume.Letter);
@@ -166,9 +169,39 @@ internal sealed class ScanRepository(Database database)
             command.Parameters.AddWithValue("$total", (long)volume.TotalBytes);
             command.Parameters.AddWithValue("$free", (long)volume.FreeBytes);
             command.Parameters.AddWithValue("$scanned", scanned);
+            command.Parameters.AddWithValue("$metadata", MetadataBytes(volume) ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("$unaccounted", unaccounted ?? (object)DBNull.Value);
+
+            // The journal position is what a later scan needs to ask "what changed since
+            // this one" (README section 4.5). It is written here as well as into the
+            // snapshot so that 'doctor' can answer without opening a tree.
+            command.Parameters.AddWithValue("$journal",
+                journal is null ? DBNull.Value : (long)journal.JournalId);
+            command.Parameters.AddWithValue("$usn", journal is null ? DBNull.Value : journal.NextUsn);
             command.ExecuteNonQuery();
         }
+    }
+
+    /// <summary>
+    /// The size of the file system's own bookkeeping on this volume: the <c>$MFT</c> as
+    /// NTFS reports it (README section 3.5).
+    /// </summary>
+    /// <remarks>
+    /// Recorded, never subtracted. In MFT mode <c>$MFT</c> is a node in the tree like any
+    /// other file, so taking it off the scanned total again would double-count it away;
+    /// this column exists so that a walk scan's unaccounted gap can be given a name years
+    /// later, when the snapshot is long gone.
+    /// </remarks>
+    private static long? MetadataBytes(VolumeInfo volume)
+    {
+        if (!volume.IsNtfs) return null;
+
+        // The valid data length alone, not the MFT zone. NTFS reserves clusters ahead of
+        // the $MFT for it to grow into, and those are still free space - counting them as
+        // metadata put 5.05 GB in this column on a volume whose $MFT is 1.8 GB.
+        return Audit.Probes.NtfsMetadataProbe.TryQuery(volume.Root, out var data, out _)
+            ? data.MftValidDataLength
+            : null;
     }
 
     private void WriteAggregates(SqliteTransaction transaction, long id, ScanAggregateSet aggregates)

@@ -40,6 +40,46 @@ internal sealed class NameBlobBuilder
         WriteRaw(""u8);
     }
 
+    /// <summary>
+    /// Adopts an existing blob, so offsets already recorded against it stay valid and new
+    /// names append after them.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes an incremental rescan cheap: a tree of 1.6M nodes keeps its
+    /// <see cref="NodeStore.NameOffset"/> array as it is, and only the segments of the
+    /// changed directories are interned (README section 4.5). Rebuilding the intern table
+    /// costs one pass over the blob - 20 MB of sequential bytes - against 1.6M lookups to
+    /// re-intern every name.
+    /// </remarks>
+    internal NameBlobBuilder(byte[] blob, int expectedNewSegments = 1 << 12)
+    {
+        _blob = blob;
+        _length = blob.Length;
+
+        // Sized for what is already there plus room for the new names, so the first
+        // insertions do not immediately rehash a table holding a million entries. Twelve
+        // bytes per segment is what a real disk's names average once deduplicated.
+        var estimate = Math.Max(16, blob.Length / 12 + expectedNewSegments);
+
+        var capacity = 16;
+        while (capacity < estimate * 2) capacity <<= 1;
+
+        _slots = new int[capacity];
+        _slotMask = capacity - 1;
+
+        // Offset 0 is the reserved empty-slot sentinel in every blob this type writes, so
+        // the walk starts past it and 0 keeps meaning "no entry".
+        var at = 0;
+        while (at + 2 <= _length)
+        {
+            var length = _blob[at] | (_blob[at + 1] << 8);
+            if (at + 2 + length > _length) break;
+
+            if (at > 0) Record(at, Read(_blob, at));
+            at += 2 + length;
+        }
+    }
+
     internal int Length => _length;
     internal int SegmentCount => _count;
 
@@ -104,6 +144,30 @@ internal sealed class NameBlobBuilder
         utf8.CopyTo(_blob.AsSpan(offset + 2));
         _length = needed;
         return offset;
+    }
+
+    /// <summary>
+    /// Puts an offset that is already in the blob into the intern table. A name that is
+    /// there twice - which happens where <see cref="TreeAssembly.Concat"/> joined two
+    /// volumes' blobs without re-interning - keeps its first offset, and the second copy
+    /// stays valid because the nodes pointing at it were never changed.
+    /// </summary>
+    private void Record(int offset, ReadOnlySpan<byte> utf8)
+    {
+        var slot = Hash(utf8) & _slotMask;
+
+        while (true)
+        {
+            var existing = _slots[slot];
+            if (existing == 0) break;
+            if (Read(_blob, existing).SequenceEqual(utf8)) return;
+            slot = (slot + 1) & _slotMask;
+        }
+
+        _slots[slot] = offset;
+        _count++;
+
+        if (_count * 10 > _slots.Length * 6) Rehash();
     }
 
     private void Rehash()

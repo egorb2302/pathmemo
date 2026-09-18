@@ -10,6 +10,16 @@ using PathMemo.Platform;
 
 namespace PathMemo.Config;
 
+/// <summary>What a scan is allowed to do before it starts (README sections 4, 12).</summary>
+internal sealed record ScanSettings
+{
+    /// <summary>
+    /// Whether a rescan may be built from the change journal instead of a traversal
+    /// (README section 4.5). On by default, and <c>scan --full</c> overrides it once.
+    /// </summary>
+    internal bool UseUsnIncremental { get; init; } = true;
+}
+
 /// <summary>Paths the user declared off limits, and the holes punched in the built-in list.</summary>
 internal sealed record ProtectSettings
 {
@@ -93,6 +103,7 @@ internal sealed class AppConfig
 {
     private static AppConfig? _current;
 
+    internal ScanSettings Scan { get; private init; } = new();
     internal ProtectSettings Protect { get; private init; } = new();
     internal DeleteSettings Delete { get; private init; } = new();
     internal RulesSettings Rules { get; private init; } = new();
@@ -145,6 +156,7 @@ internal sealed class AppConfig
 
             return new AppConfig
             {
+                Scan = ReadScan(document.RootElement, warnings),
                 Protect = ReadProtect(document.RootElement, warnings),
                 Delete = ReadDelete(document.RootElement, warnings),
                 Rules = ReadRules(document.RootElement, warnings),
@@ -158,6 +170,18 @@ internal sealed class AppConfig
             warnings.Add($"config.json is not valid JSON ({ex.Message}); using defaults");
             return new AppConfig { Warnings = warnings };
         }
+    }
+
+    private static ScanSettings ReadScan(JsonElement root, List<string> warnings)
+    {
+        var defaults = new ScanSettings();
+        if (!root.TryGetProperty("scan", out var scan) || scan.ValueKind != JsonValueKind.Object)
+            return defaults;
+
+        return new ScanSettings
+        {
+            UseUsnIncremental = Boolean(scan, "useUsnIncremental", defaults.UseUsnIncremental, warnings),
+        };
     }
 
     private static ProtectSettings ReadProtect(JsonElement root, List<string> warnings)

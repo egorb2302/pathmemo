@@ -2,6 +2,7 @@ using System.Globalization;
 using PathMemo.Analysis;
 using PathMemo.Cli.Interactive;
 using PathMemo.Cli.Output;
+using PathMemo.Config;
 using PathMemo.Platform;
 using PathMemo.Scanning;
 using PathMemo.Scanning.Mft;
@@ -40,6 +41,7 @@ internal static class ScanCommand
             Parallelism = options.Parallelism,
             Note = options.Note,
             ForceScanner = options.Scanner,
+            Full = options.Full,
         };
 
         // History is a convenience, not a precondition: a busy or broken database must
@@ -209,6 +211,14 @@ internal static class ScanCommand
         IProgress<ScanProgress>? progress,
         CancellationToken ct)
     {
+        // Taken before anything is traversed, so that a file written during this scan
+        // belongs to the next one rather than being silently missed by both
+        // (README section 4.5).
+        var watermarks = UsnIncrementalScanner.Capture(volumes);
+
+        if (await TryIncrementalAsync(request, volumes, progress, ct) is { } incremental)
+            return incremental;
+
         var mft = new MftScanner();
         var walk = new WalkScanner();
 
@@ -249,7 +259,72 @@ internal static class ScanCommand
         if (viaWalk.Count > 0 && !ct.IsCancellationRequested)
             results.Add(await walk.ScanAsync(request, viaWalk, progress, ct));
 
-        return Merge(results, fallbacks, request);
+        return Merge(results, fallbacks, request) with { Usn = watermarks };
+    }
+
+    /// <summary>
+    /// The incremental path, or null when it does not apply and the disk has to be walked
+    /// (README section 4.5).
+    /// </summary>
+    /// <remarks>
+    /// Every refusal is printed, because the difference between a rescan that took 0.3 s
+    /// and one that took nine seconds is something the user is entitled to understand. The
+    /// reasons are all ordinary - no previous scan, not elevated, the journal rolled over -
+    /// and none of them is a failure.
+    /// </remarks>
+    private static async Task<ScanResult?> TryIncrementalAsync(
+        ScanRequest request,
+        IReadOnlyList<VolumeInfo> volumes,
+        IProgress<ScanProgress>? progress,
+        CancellationToken ct)
+    {
+        if (request.Full || request.ForceScanner is not null) return null;
+        if (!AppConfig.Current.Scan.UseUsnIncremental) return null;
+
+        // An unelevated process cannot read a journal at all, and saying so on every scan
+        // would be noise next to the elevation notice it already prints (README section 4.2).
+        if (!Elevation.IsElevated) return null;
+
+        SnapshotContents? baseline = null;
+        var baseId = 0L;
+
+        if (SnapshotStore.Latest() is { } latest)
+        {
+            try
+            {
+                baseline = SnapshotStore.Load(latest.Id);
+                baseId = latest.Id;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            {
+                // A snapshot that will not open is a full scan's problem, not a reason to
+                // stop: the tree is about to be rebuilt from the disk anyway.
+                baseline = null;
+            }
+        }
+
+        if (!UsnIncrementalScanner.CanBase(baseline, volumes, out var why))
+        {
+            Console.Error.WriteLine($"pathmemo: full scan - {why}");
+            return null;
+        }
+
+        try
+        {
+            var result = await new UsnIncrementalScanner(baseline!)
+                .ScanAsync(request, volumes, progress, ct);
+
+            Console.Error.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "pathmemo: rescanned from the change journal since scan {0} - {1:N0} director{2} re-read",
+                baseId, result.ChangedDirectories, result.ChangedDirectories == 1 ? "y" : "ies"));
+
+            return result;
+        }
+        catch (UsnUnavailableException ex)
+        {
+            Console.Error.WriteLine($"pathmemo: full scan - {ex.Message}");
+            return null;
+        }
     }
 
     private static ScanResult Merge(List<ScanResult> results, List<ScanError> extraErrors, ScanRequest request)
@@ -312,7 +387,7 @@ internal static class ScanCommand
         var selected = new List<VolumeInfo>();
         foreach (var root in roots)
         {
-            var full = Path.GetFullPath(root);
+            var full = LongForm(Path.GetFullPath(root));
             if (!Directory.Exists(full))
             {
                 Console.Error.WriteLine($"pathmemo: not a directory: {full}");
@@ -334,6 +409,25 @@ internal static class ScanCommand
         return selected;
     }
 
+    /// <summary>
+    /// Expands 8.3 segments in a root the user gave us, so the snapshot stores the names
+    /// the filesystem itself reports.
+    /// </summary>
+    /// <remarks>
+    /// <c>%TEMP%</c> is <c>C:\Users\MIXPC~1\AppData\Local\Temp</c> on this machine, and a
+    /// snapshot rooted there would hold paths no other tool can follow. It also matters to
+    /// the incremental rescan, which resolves changed directories through the kernel and
+    /// gets long names back: two spellings of one directory would never match
+    /// (README sections 4.5, 9.3).
+    /// </remarks>
+    private static string LongForm(string path)
+    {
+        Span<char> buffer = stackalloc char[1024];
+        var length = Platform.Native.Kernel32Extra.GetLongPathName(path, buffer, (uint)buffer.Length);
+
+        return length > 0 && length < buffer.Length ? new string(buffer[..(int)length]) : path;
+    }
+
     private static string EnsureTrailingSeparator(string path) =>
         path.EndsWith(Path.DirectorySeparatorChar) ? path : path + Path.DirectorySeparatorChar;
 
@@ -350,7 +444,15 @@ internal static class ScanCommand
             SizeFormat.Bytes(result.AllocatedBytes),
             result.Duration.TotalSeconds,
             result.Duration.TotalSeconds > 0 ? result.TotalNodes / result.Duration.TotalSeconds : 0,
-            result.Scanner == ScannerKind.Mft ? "MFT" : "walk"));
+            ScannerName(result.Scanner)));
+
+        if (result.Scanner == ScannerKind.Incremental)
+        {
+            w.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "  {0:N0} director{1} re-read from the disk; the rest of the tree is scan {2}'s",
+                result.ChangedDirectories, result.ChangedDirectories == 1 ? "y" : "ies",
+                BaseScanLabel(snapshotId)));
+        }
 
         PrintReconciliation(w, result);
 
@@ -399,6 +501,24 @@ internal static class ScanCommand
         w.WriteLine();
         w.WriteLine("Largest files");
         PrintTop(w, tree, directories: false, options.Top);
+    }
+
+    private static string ScannerName(ScannerKind kind) => kind switch
+    {
+        ScannerKind.Mft => "MFT",
+        ScannerKind.Incremental => "incremental",
+        _ => "walk",
+    };
+
+    /// <summary>
+    /// Which scan the untouched part of an incremental tree came from. The new snapshot's
+    /// own number minus one is not it - retention or a failed scan can leave gaps - so the
+    /// store is asked.
+    /// </summary>
+    private static string BaseScanLabel(long? snapshotId)
+    {
+        var previous = SnapshotStore.List().FirstOrDefault(s => snapshotId is null || s.Id < snapshotId);
+        return previous is null ? "the previous one" : previous.Id.ToString(CultureInfo.InvariantCulture);
     }
 
     /// <summary>
@@ -476,6 +596,12 @@ internal static class ScanCommand
 
         w.WriteLine();
         w.WriteLine("Accuracy limits of this scan");
+
+        if ((result.Flags & ScanFlags.Incremental) != 0)
+        {
+            w.WriteLine("  · built from the change journal: directories the journal did not mention keep");
+            w.WriteLine("    the numbers the previous scan measured.  'pathmemo scan --full' rebuilds them");
+        }
 
         if ((result.Flags & ScanFlags.PartialHardlinkResolution) != 0)
         {
@@ -581,6 +707,9 @@ internal sealed record ScanOptions
 
     /// <summary>Skip the restart-as-administrator offer and go straight to the degraded scan.</summary>
     internal bool NoElevate { get; init; }
+
+    /// <summary>Traverse everything, ignoring the change journal (README section 4.5).</summary>
+    internal bool Full { get; init; }
 
     /// <summary>What to pass to the elevated copy if the user asks for one.</summary>
     internal IReadOnlyList<string> RelaunchArguments { get; init; } = ["--interactive"];

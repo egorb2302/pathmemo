@@ -103,6 +103,26 @@ internal static class ArgParse
         _ => throw new ArgumentException($"size mode must be unique, allocated or logical, not '{text}'"),
     };
 
+    /// <summary>
+    /// A 24-hour clock time, <c>HH:MM</c>. Invariant on purpose: a scheduled scan's
+    /// <c>--time 03:00</c> must mean the same thing whatever the machine's locale, and
+    /// <c>3:00 PM</c> in a script is a bug either way.
+    /// </summary>
+    internal static TimeOnly Time(string text)
+    {
+        if (TimeOnly.TryParseExact(text.Trim(), ["HH:mm", "H:mm", "HH:mm:ss"],
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var value))
+            return value;
+
+        throw new ArgumentException($"not a time of day: '{text}' (use HH:MM, e.g. 03:00)");
+    }
+
+    /// <summary>A day name, in English, as the Task Scheduler's own XML spells it.</summary>
+    internal static DayOfWeek Day(string text) =>
+        Enum.TryParse<DayOfWeek>(text.Trim(), ignoreCase: true, out var value)
+            ? value
+            : throw new ArgumentException($"not a day of the week: '{text}' (try monday)");
+
     /// <summary>Comma-separated extension list, normalised to lower case without dots.</summary>
     internal static IReadOnlySet<string> Extensions(string text) =>
         text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

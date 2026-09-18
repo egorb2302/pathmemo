@@ -2,6 +2,8 @@ using System.Globalization;
 using PathMemo.Cli.Output;
 using PathMemo.Config;
 using PathMemo.Platform;
+using PathMemo.Platform.Native;
+using PathMemo.Scanning;
 using PathMemo.Snapshots;
 using PathMemo.Storage;
 
@@ -70,14 +72,110 @@ internal static class DoctorCommand
         }
         w.WriteLine();
 
+        PrintJournals(w, volumes);
+
         if (!Elevation.IsElevated && volumes.Any(v => v.IsNtfs))
         {
-            w.WriteLine("  Hint: run as administrator to enable the MFT scanner");
+            w.WriteLine("  Hint: run as administrator to enable the MFT scanner and incremental rescans");
             w.WriteLine("        (seconds instead of minutes, plus accurate on-disk sizes).");
             w.WriteLine();
         }
 
         return ExitCode.Ok;
+    }
+
+    /// <summary>
+    /// The change journal per volume, and whether the next scan can be an incremental one
+    /// (README sections 4.5, 13).
+    /// </summary>
+    /// <remarks>
+    /// Reporting this needs no privilege - <c>FSCTL_QUERY_USN_JOURNAL</c> answers a handle
+    /// to the volume's root directory - while reading records from the journal is
+    /// administrator-only. So an ordinary user can be told exactly why a rescan will take
+    /// nine seconds rather than a third of one.
+    /// </remarks>
+    private static void PrintJournals(TextWriter w, IReadOnlyList<VolumeInfo> volumes)
+    {
+        var ntfs = volumes.Where(v => v.IsNtfs).ToList();
+        if (ntfs.Count == 0) return;
+
+        Section(w, "CHANGE JOURNAL");
+        w.WriteLine("  VOL   STATE         SIZE       NEXT USN            INCREMENTAL RESCAN");
+        w.WriteLine("  " + new string('-', 76));
+
+        var (baseScan, recorded) = LastRecordedJournals();
+
+        foreach (var volume in ntfs)
+        {
+            if (!UsnJournal.TryQuery(volume.Root, out var data, out var error))
+            {
+                w.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "  {0,-5} {1,-13} {2,-10} {3,-19} {4}",
+                    volume.Letter,
+                    error == Usn.ErrorJournalNotActive ? "off" : $"error {error}",
+                    "", "", "no - the journal is not running"));
+
+                w.WriteLine($"        enable it with:  fsutil usn createjournal m=32000000 a=8000000 {volume.Letter}");
+                continue;
+            }
+
+            recorded.TryGetValue(volume.Letter, out var saved);
+
+            w.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "  {0,-5} {1,-13} {2,-10} 0x{3:x12}      {4}",
+                volume.Letter,
+                "active",
+                SizeFormat.Bytes(data.MaximumSize),
+                data.NextUsn,
+                Verdict(data, saved, baseScan)));
+        }
+
+        w.WriteLine();
+    }
+
+    /// <summary>What an incremental rescan of this volume would do, and why.</summary>
+    private static string Verdict(UsnJournalData now, ScanVolumeRow? saved, long? baseScan)
+    {
+        if (!Elevation.IsElevated) return "no - reading the journal needs administrator rights";
+        if (saved?.UsnJournalId is null || saved.NextUsn is null) return "no - no scan has recorded a position";
+
+        if ((ulong)saved.UsnJournalId.Value != now.UsnJournalId)
+            return "no - the journal was recreated since that scan";
+
+        if (saved.NextUsn.Value < now.LowestValidUsn || saved.NextUsn.Value < now.FirstUsn)
+            return "no - the journal no longer reaches that far back";
+
+        var behind = now.NextUsn - saved.NextUsn.Value;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"yes - from scan {baseScan}, {behind:N0} bytes of records behind");
+    }
+
+    /// <summary>
+    /// The journal positions the newest scan wrote, by volume letter. Read from the
+    /// database rather than from the snapshot: it is the same pair of numbers, and it does
+    /// not cost opening a 25 MB tree to print one line (README section 11.1).
+    /// </summary>
+    private static (long? Scan, Dictionary<string, ScanVolumeRow> Volumes) LastRecordedJournals()
+    {
+        var empty = new Dictionary<string, ScanVolumeRow>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            using var catalog = ScanCatalog.TryOpen(out _);
+            if (catalog is null) return (null, empty);
+
+            var latest = catalog.Scans.List(limit: 1).FirstOrDefault();
+            if (latest is null) return (null, empty);
+
+            foreach (var row in catalog.Scans.Volumes(latest.Id)) empty[row.Letter] = row;
+            return (latest.Id, empty);
+        }
+        catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or DatabaseException)
+        {
+            // doctor's job is to report, not to fail. An unusable database has already been
+            // said so a few lines above.
+            return (null, empty);
+        }
     }
 
     /// <summary>
