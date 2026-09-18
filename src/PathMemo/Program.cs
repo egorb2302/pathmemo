@@ -79,35 +79,47 @@ internal static class Program
         }
         catch (OperationCanceledException)
         {
-            Console.Error.WriteLine("cancelled");
-            return ExitCode.Cancelled;
+            return Fatal("cancelled", ExitCode.Cancelled);
         }
         catch (ArgumentException ex)
         {
-            Console.Error.WriteLine($"pathmemo: {ex.Message}");
-            return ExitCode.Usage;
+            return Fatal($"pathmemo: {ex.Message}", ExitCode.Usage);
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex)
         {
-            Console.Error.WriteLine($"pathmemo: {ex.Message}");
-            return ex.SqliteErrorCode is 5 or 6 ? ExitCode.Locked : ExitCode.Failure;
+            return Fatal($"pathmemo: {ex.Message}",
+                ex.SqliteErrorCode is 5 or 6 ? ExitCode.Locked : ExitCode.Failure);
         }
         catch (Storage.DatabaseException ex)
         {
             // Exit code 8 exists so a script can tell "another pathmemo is running"
             // from a real failure (README section 13.5).
-            Console.Error.WriteLine($"pathmemo: {ex.Message}");
-            return ex.Locked ? ExitCode.Locked : ExitCode.Failure;
+            return Fatal($"pathmemo: {ex.Message}", ex.Locked ? ExitCode.Locked : ExitCode.Failure);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"pathmemo: {ex.Message}");
-            return ExitCode.Failure;
+            return Fatal($"pathmemo: {ex.Message}", ExitCode.Failure);
         }
         finally
         {
             Console.Out.Flush();
         }
+    }
+
+    /// <summary>
+    /// Reports a failure and, when the console window belongs to us, holds it open.
+    /// </summary>
+    /// <remarks>
+    /// A window Explorer created for a double-click dies with the process, taking the
+    /// message with it - the user sees a flash and nothing else, which is the worst
+    /// possible way to learn that the database is locked (README section 2.1).
+    /// </remarks>
+    private static int Fatal(string message, int code)
+    {
+        Console.Error.WriteLine(message);
+
+        if (ConsoleOwnership.OwnsTheWindow) Launcher.Pause();
+        return code;
     }
 
     /// <summary>

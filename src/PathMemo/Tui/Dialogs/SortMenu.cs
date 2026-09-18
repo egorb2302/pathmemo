@@ -29,7 +29,7 @@ internal sealed class SortMenu(SortKey current, bool ascending, Action<SortKey, 
     }
 
     private Draw.PanelRow Option(char key, string label, SortKey value) =>
-        new($"  {key}   {TextWidth.Pad(label, 14)}{(value == current ? "← current" : "")}",
+        new($"  {key}   {TextWidth.Pad(label, 14)}{(value == current ? Glyphs.CurrentSort : "")}",
             value == current ? Style.Accent : Style.Plain);
 
     public bool HandleKey(in TuiKey key, TuiSession session)

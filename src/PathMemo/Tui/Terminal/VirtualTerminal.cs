@@ -86,10 +86,11 @@ internal static class VirtualTerminal
         }
     }
 
-    /// <summary>Restores the console mode this process changed. Safe to call twice.</summary>
+    /// <summary>Restores the console state this process changed. Safe to call twice.</summary>
     internal static void Restore()
     {
         LeaveAlternateBuffer();
+        ConsoleWindow.Restore();
 
         if (!_modeChanged) return;
         _modeChanged = false;

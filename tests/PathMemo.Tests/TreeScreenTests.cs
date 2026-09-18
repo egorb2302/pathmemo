@@ -274,6 +274,29 @@ public class TreeScreenTests
         Assert.Contains("%", Rows(narrow.Screen)[0]);
     }
 
+    [Fact]
+    public void A_console_without_a_truetype_font_gets_an_all_ascii_frame()
+    {
+        // The legacy raster font - what an old profile hands to a double-clicked exe -
+        // cannot draw block or box-drawing characters, so the whole frame switches sets.
+        try
+        {
+            Glyphs.Ascii = true;
+
+            var (view, session, screen) = Open(Sample());
+            Press(view, session, 'i');                   // a panel, with its border
+            Render(view, session, screen);
+
+            for (var y = 0; y < screen.Height; y++)
+                foreach (var c in screen.TextAt(y))
+                    Assert.True(c < 128, $"row {y} contains U+{(int)c:X4}, which a raster font cannot draw");
+        }
+        finally
+        {
+            Glyphs.Ascii = false;
+        }
+    }
+
     private static TestTree Sample() => new TestTree()
         .File(@"C:\Windows\WinSxS\big.dll", 12L << 30)
         .File(@"C:\Users\me\video.mp4", 6L << 30)

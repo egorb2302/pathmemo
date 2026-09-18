@@ -33,8 +33,9 @@ namespace PathMemo.Tui.Terminal;
 /// </remarks>
 internal static class Sanitizer
 {
-    /// <summary>Stands in for a control character. One column wide, visible, unambiguous.</summary>
-    private const char Replacement = '·';   // MIDDLE DOT
+    /// <summary>Stands in for a control character: one column wide, visible, unambiguous.</summary>
+    // MIDDLE DOT, or a question mark where the font cannot draw one.
+    private static char Replacement => Glyphs.ControlChar;
 
     internal static string Clean(string raw)
     {

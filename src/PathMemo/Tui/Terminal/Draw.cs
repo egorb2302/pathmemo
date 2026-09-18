@@ -7,16 +7,9 @@ namespace PathMemo.Tui.Terminal;
 /// </summary>
 internal static class Draw
 {
-    private const char Filled = '█';      // FULL BLOCK
-    private const char Empty = '░';       // LIGHT SHADE
-    private const char Horizontal = '─';  // BOX DRAWINGS LIGHT HORIZONTAL
-
-    private static readonly char[] Spark =
-        ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
     internal static void Rule(Screen screen, int y)
     {
-        var line = screen.Row(y).Space().Add(Horizontal, screen.Width - 2, Style.Dim);
+        var line = screen.Row(y).Space().Add(Glyphs.Rule, screen.Width - 2, Style.Dim);
         screen.Put(y, line);
     }
 
@@ -30,7 +23,7 @@ internal static class Draw
         // block as 1.5% would make the column a lie, and the percentage is right there.
         if (filled == 0 && share * width >= 25) filled = 1;
 
-        line.Add(Filled, filled, style).Add(Empty, width - filled, Style.BarEmpty);
+        line.Add(Glyphs.BarFilled, filled, style).Add(Glyphs.BarEmpty, width - filled, Style.BarEmpty);
     }
 
     /// <summary>
@@ -51,11 +44,12 @@ internal static class Draw
         var max = taken.Max();
         var span = max - min;
 
+        var spark = Glyphs.Spark;
         var chars = new char[taken.Count];
         for (var i = 0; i < taken.Count; i++)
             chars[i] = span == 0
-                ? Spark[3]
-                : Spark[Math.Clamp((int)((taken[i] - min) * (Spark.Length - 1) / span), 0, Spark.Length - 1)];
+                ? spark[3]
+                : spark[Math.Clamp((int)((taken[i] - min) * (spark.Length - 1) / span), 0, spark.Length - 1)];
 
         return new string(chars);
     }
@@ -101,30 +95,30 @@ internal static class Draw
         var top = Math.Max(0, (screen.Height - height) / 2);
 
         var head = screen.Row(top).Space(left)
-            .Add("┌─ ", Style.Dim).Add(title, Style.Title).Space()
-            .Add('─', Math.Max(0, inner - TextWidth.Of(title) - 3), Style.Dim)
-            .Add("┐", Style.Dim);
+            .Add(Glyphs.PanelTopLeft + " ", Style.Dim).Add(title, Style.Title).Space()
+            .Add(Glyphs.Rule, Math.Max(0, inner - TextWidth.Of(title) - 3), Style.Dim)
+            .Add(Glyphs.PanelTopRight, Style.Dim);
         screen.Put(top, head);
 
         var body = height - 4;
         for (var i = 0; i < body; i++)
         {
             var y = top + 1 + i;
-            var line = screen.Row(y).Space(left).Add("│", Style.Dim).Space();
+            var line = screen.Row(y).Space(left).Add(Glyphs.PanelSide, Style.Dim).Space();
 
             if (i < rows.Count) line.Add(rows[i].Text, rows[i].Style);
 
-            line.PadTo(left + inner + 1).Add("│", Style.Dim);
+            line.PadTo(left + inner + 1).Add(Glyphs.PanelSide, Style.Dim);
             screen.Put(y, line);
         }
 
         var footerRow = screen.Row(top + height - 3).Space(left)
-            .Add("│", Style.Dim).Space().Add(footer, Style.Dim)
-            .PadTo(left + inner + 1).Add("│", Style.Dim);
+            .Add(Glyphs.PanelSide, Style.Dim).Space().Add(footer, Style.Dim)
+            .PadTo(left + inner + 1).Add(Glyphs.PanelSide, Style.Dim);
         screen.Put(top + height - 3, footerRow);
 
         var tail = screen.Row(top + height - 2).Space(left)
-            .Add("└", Style.Dim).Add('─', inner, Style.Dim).Add("┘", Style.Dim);
+            .Add(Glyphs.PanelBottomLeft, Style.Dim).Add(Glyphs.Rule, inner, Style.Dim).Add(Glyphs.PanelBottomRight, Style.Dim);
         screen.Put(top + height - 2, tail);
     }
 

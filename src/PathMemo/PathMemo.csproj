@@ -20,7 +20,11 @@
     <InvariantGlobalization>true</InvariantGlobalization>
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- <ApplicationIcon>Resources\app.ico</ApplicationIcon> -->
+
+    <!-- The exe is meant to be double-clicked from Explorer (README section 2.1), and a
+         generic console icon in a Downloads folder is not something anyone double-clicks.
+         Regenerate with build\make-icon.ps1. -->
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
 
     <!-- Trimming stays viable because there is no reflection-heavy dependency
          (README section 18): no Dapper, no DbUp, no Terminal.Gui. -->

@@ -23,7 +23,7 @@ internal sealed class DetailsDialog(int node) : ITuiView
     {
         var rows = new List<Draw.PanelRow>();
         foreach (var line in Describe(session, node))
-            rows.Add(new Draw.PanelRow(line, line.StartsWith('·') ? Style.Dim : Style.Plain));
+            rows.Add(new Draw.PanelRow(line, line.StartsWith(Glyphs.Bullet, StringComparison.Ordinal) ? Style.Dim : Style.Plain));
 
         Draw.Panel(screen, Sanitizer.Clean(session.Tree.Name(node)), rows, "y copy path   Y copy details   any other key closes");
     }
@@ -94,23 +94,23 @@ internal sealed class DetailsDialog(int node) : ITuiView
 
         var flags = tree.Flags[node];
         if ((flags & NodeFlags.Sparse) != 0)
-            lines.Add("· sparse or compressed: it occupies less than its logical size");
+            lines.Add(Glyphs.Bullet + "sparse or compressed: it occupies less than its logical size");
         if ((flags & NodeFlags.HardlinkAlias) != 0)
-            lines.Add("· another name for a file counted elsewhere; deleting it frees nothing");
+            lines.Add(Glyphs.Bullet + "another name for a file counted elsewhere; deleting it frees nothing");
         if ((flags & NodeFlags.CloudOnly) != 0)
-            lines.Add("· stored in the cloud; deleting it frees nothing locally");
+            lines.Add(Glyphs.Bullet + "stored in the cloud; deleting it frees nothing locally");
         if ((flags & NodeFlags.Reparse) != 0)
-            lines.Add("· a link, not a directory: its target was not counted here");
+            lines.Add(Glyphs.Bullet + "a link, not a directory: its target was not counted here");
         if ((flags & NodeFlags.SelfData) != 0)
-            lines.Add("· pathmemo's own data directory");
+            lines.Add(Glyphs.Bullet + "pathmemo's own data directory");
         if ((flags & NodeFlags.Incomplete) != 0)
-            lines.Add("· could not be read in full, so this total is a lower bound");
+            lines.Add(Glyphs.Bullet + "could not be read in full, so this total is a lower bound");
 
         if (Sanitizer.NeedsCleaning(raw))
-            lines.Add("· the real name contains hidden or control characters, shown as dots");
+            lines.Add(Glyphs.Bullet + "the real name contains hidden or control characters, shown as dots");
 
         if (!isDirectory && FileLaunch.FromInternet(tree.GetPath(node)))
-            lines.Add("· downloaded from the internet (mark of the web)");
+            lines.Add(Glyphs.Bullet + "downloaded from the internet (mark of the web)");
 
         return lines;
     }

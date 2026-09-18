@@ -165,8 +165,8 @@ internal sealed class TreeScreen : ITuiView
 
     private void Header(Screen screen, TuiSession session)
     {
-        var right = string.Format(CultureInfo.InvariantCulture, "{0}  ·  scan {1}  ·  {2:MM-dd HH:mm}",
-            session.ModeName, session.ScanId, session.Snapshot!.StartedUtc);
+        var right = string.Format(CultureInfo.InvariantCulture, "{0}{3}scan {1}{3}{2:MM-dd HH:mm}",
+            session.ModeName, session.ScanId, session.Snapshot!.StartedUtc, Glyphs.Dot);
 
         var line = screen.Row(0).Space().Add("pathmemo", Style.Title).Space(2);
         var path = Sanitizer.Clean(session.Tree.GetPath(_node));
@@ -187,14 +187,14 @@ internal sealed class TreeScreen : ITuiView
             .Add(" files", Style.Dim);
 
         if (session.Marks.Count > 0)
-            line.Add("  ·  ", Style.Dim)
+            line.Add(Glyphs.Dot, Style.Dim)
                 .Add($"{session.Marks.Count} marked, {SizeFormat.Bytes(session.MarkedBytes())}", Style.Mark);
 
         if (_filter != RowFilter.All)
-            line.Add("  ·  ", Style.Dim).Add(_filter == RowFilter.Directories ? "directories only" : "files only", Style.Accent);
+            line.Add(Glyphs.Dot, Style.Dim).Add(_filter == RowFilter.Directories ? "directories only" : "files only", Style.Accent);
 
         if (_sort != SortKey.Size || _ascending)
-            line.Add("  ·  ", Style.Dim).Add($"by {_sort.ToString().ToLowerInvariant()}{(_ascending ? " asc" : "")}", Style.Accent);
+            line.Add(Glyphs.Dot, Style.Dim).Add($"by {_sort.ToString().ToLowerInvariant()}{(_ascending ? " asc" : "")}", Style.Accent);
 
         var parent = tree.Parent[_node];
         line.Right(parent == NodeStore.NoNode
@@ -217,8 +217,8 @@ internal sealed class TreeScreen : ITuiView
         var line = screen.Row(4 + index - _scroll);
         line.Highlight = index == _selected;
 
-        line.Add(index == _selected ? "▸" : " ", Style.Accent);
-        line.Add(marked ? "×" : " ", Style.Mark);
+        line.Add(index == _selected ? Glyphs.Cursor.ToString() : " ", Style.Accent);
+        line.Add(marked ? Glyphs.Mark.ToString() : " ", Style.Mark);
         line.Space();
 
         line.Add(SizeFormat.Bytes(size).PadLeft(9), size == 0 ? Style.Dim : Style.Plain);
@@ -250,7 +250,7 @@ internal sealed class TreeScreen : ITuiView
 
         if (_typing)
         {
-            screen.Put(y, screen.Row(y).Space().Add("/", Style.Accent).Add(_query).Add("█", Style.Accent));
+            screen.Put(y, screen.Row(y).Space().Add("/", Style.Accent).Add(_query).Add(Glyphs.Caret.ToString(), Style.Accent));
         }
         else
         {
@@ -660,10 +660,11 @@ internal sealed class TreeScreen : ITuiView
         var parent = session.Tree.Parent[node];
         GoTo(session, parent == NodeStore.NoNode ? node : parent, node);
 
-        session.Say(string.Format(CultureInfo.InvariantCulture, "match {0} of {1}{2}  ·  {3}",
+        session.Say(string.Format(CultureInfo.InvariantCulture, "match {0} of {1}{2}{4}{3}",
             _matchIndex + 1, _matches.Length,
             _matches.Length == MaxMatches ? "+" : "",
-            SizeFormat.Bytes(TreeQuery.Size(session.Tree, node, session.Mode))));
+            SizeFormat.Bytes(TreeQuery.Size(session.Tree, node, session.Mode)),
+            Glyphs.Dot));
 
         return true;
     }

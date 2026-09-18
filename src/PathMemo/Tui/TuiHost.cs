@@ -47,6 +47,8 @@ internal static class TuiHost
 
         try
         {
+            // Title, quick-edit, window size and the glyph set, before the first frame.
+            ConsoleWindow.Prepare(Platform.ConsoleOwnership.OwnsTheWindow);
             Active = true;
             exitCode = Loop(ct);
             return true;

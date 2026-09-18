@@ -77,7 +77,7 @@ internal sealed class OverviewScreen : ITuiView
             if (row is { UnaccountedBytes: { } gap } && row.UsedBytes > 0)
             {
                 var share = gap * 100.0 / row.UsedBytes;
-                detail.Add("  ·  ", Style.Dim)
+                detail.Add(Glyphs.Dot, Style.Dim)
                       .Add(SizeFormat.Bytes(gap), share > 5 ? Style.Warning : Style.Plain)
                       .Add(string.Format(CultureInfo.InvariantCulture, " unaccounted ({0:F1}%)", share), Style.Dim);
             }
@@ -121,19 +121,19 @@ internal sealed class OverviewScreen : ITuiView
 
         var line = screen.Row(y).Space(2);
         line.Add($"scan {last.Id}", Style.Strong)
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add(last.StartedUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))
             .Add(" UTC", Style.Dim)
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add(ScanRepository.Name(last.Scanner))
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add(last.TotalFiles.ToString("N0", CultureInfo.InvariantCulture))
             .Add(" files", Style.Dim)
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add(SizeFormat.Bytes(last.AllocatedBytes));
 
         if (last.DurationMs is { } ms)
-            line.Add("  ·  ", Style.Dim)
+            line.Add(Glyphs.Dot, Style.Dim)
                 .Add(string.Format(CultureInfo.InvariantCulture, "{0:F1} s", ms / 1000.0), Style.Dim);
 
         screen.Put(y++, line);
@@ -150,7 +150,7 @@ internal sealed class OverviewScreen : ITuiView
 
         if (last.ErrorCount > 0)
         {
-            if (wrote) notes.Add("  ·  ", Style.Dim);
+            if (wrote) notes.Add(Glyphs.Dot, Style.Dim);
             notes.Add(last.ErrorCount.ToString("N0", CultureInfo.InvariantCulture), Style.Warning)
                  .Add(" unreadable path(s)", Style.Dim);
             wrote = true;
@@ -158,14 +158,14 @@ internal sealed class OverviewScreen : ITuiView
 
         if (!last.SnapshotAvailable)
         {
-            if (wrote) notes.Add("  ·  ", Style.Dim);
+            if (wrote) notes.Add(Glyphs.Dot, Style.Dim);
             notes.Add("tree no longer stored", Style.Dim);
             wrote = true;
         }
 
         if (!Elevation.IsElevated && last.Scanner == Scanning.ScannerKind.Walk)
         {
-            if (wrote) notes.Add("  ·  ", Style.Dim);
+            if (wrote) notes.Add(Glyphs.Dot, Style.Dim);
             notes.Add("as administrator the MFT scan is ~10x faster", Style.Dim);
             wrote = true;
         }
@@ -191,7 +191,7 @@ internal sealed class OverviewScreen : ITuiView
         var line = screen.Row(y).Space(2).Add(spark, Style.Accent).Space(2);
         line.Add(SizeFormat.Bytes(values[^1]))
             .Add(" used", Style.Dim)
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add((change >= 0 ? "+" : "") + SizeFormat.Bytes(change), change > 0 ? Style.Warning : Style.Good)
             .Add($" over {report.Series.Count} scans", Style.Dim);
 
@@ -211,13 +211,13 @@ internal sealed class OverviewScreen : ITuiView
         var line = screen.Row(y).Space(2);
         line.Add($"{report.SnapshotCount} snapshot(s)")
             .Add($" {SizeFormat.Bytes(report.SnapshotBytes)}", Style.Dim)
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add($"database {SizeFormat.Bytes(report.DatabaseBytes)}")
-            .Add("  ·  ", Style.Dim)
+            .Add(Glyphs.Dot, Style.Dim)
             .Add($"{report.ScanCount} scan(s) recorded");
 
         if (report.QuarantineBytes > 0)
-            line.Add("  ·  ", Style.Dim).Add($"quarantine {SizeFormat.Bytes(report.QuarantineBytes)}");
+            line.Add(Glyphs.Dot, Style.Dim).Add($"quarantine {SizeFormat.Bytes(report.QuarantineBytes)}");
 
         screen.Put(y++, line);
         if (y > bottom) return;

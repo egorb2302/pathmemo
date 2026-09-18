@@ -124,6 +124,7 @@ internal static partial class Kernel32Extra
     [LibraryImport(Dll)]
     internal static partial uint GetConsoleOutputCP();
 
+    internal const int StdInputHandle = -10;
     internal const int StdOutputHandle = -11;
 
     /// <summary>ENABLE_PROCESSED_OUTPUT: required for anything escape-driven.</summary>
@@ -145,6 +146,36 @@ internal static partial class Kernel32Extra
     [LibraryImport(Dll, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetConsoleMode(nint hConsoleHandle, uint dwMode);
+
+    /// <summary>
+    /// ENABLE_QUICK_EDIT_MODE: a click in the window starts a selection and the next
+    /// write blocks until it is cleared. Fine for a shell, fatal for a redrawing screen.
+    /// </summary>
+    internal const uint EnableQuickEditMode = 0x0040;
+
+    /// <summary>ENABLE_EXTENDED_FLAGS: without it the quick-edit bit is ignored.</summary>
+    internal const uint EnableExtendedFlags = 0x0080;
+
+    /// <summary>TMPF_TRUETYPE: raster fonts cannot draw box-drawing or block characters.</summary>
+    internal const uint TrueTypeFontFamily = 0x04;
+
+    /// <summary>CONSOLE_FONT_INFOEX. <c>cbSize</c> must be set or the call fails.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct ConsoleFontInfoEx
+    {
+        internal uint Size;
+        internal uint FontIndex;
+        internal short WidthPixels;
+        internal short HeightPixels;
+        internal uint FontFamily;
+        internal uint FontWeight;
+        internal fixed char FaceName[32];
+    }
+
+    [LibraryImport(Dll, EntryPoint = "GetCurrentConsoleFontEx", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static unsafe partial bool GetCurrentConsoleFontEx(
+        nint hConsoleOutput, [MarshalAs(UnmanagedType.Bool)] bool bMaximumWindow, ConsoleFontInfoEx* lpConsoleCurrentFontEx);
 
     /// <summary>Expands 8.3 segments (<c>MIXPC~1</c>) so two spellings of one directory compare equal.</summary>
     [LibraryImport(Dll, EntryPoint = "GetLongPathNameW", SetLastError = true,
