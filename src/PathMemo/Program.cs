@@ -61,6 +61,10 @@ internal static class Program
                 "tree" => TreeCommand.Run(ParseTree(rest)),
                 "top" => TopCommand.Run(ParseTop(rest)),
                 "audit" => AuditCommand.Run(ParseAudit(rest), cancellation.Token),
+                "rm" or "delete" => RmCommand.Run(ParseRm(rest), cancellation.Token),
+                "restore" => QuarantineCommands.Restore(ParseOpId(rest)),
+                "purge" => QuarantineCommands.Purge(ParsePurge(rest), cancellation.Token),
+                "ops" => ParseOps(rest),
                 "history" => HistoryCommand.Run(ParseHistory(rest)),
                 "diff" => DiffCommand.Run(ParseDiff(rest)),
                 "doctor" => DoctorCommand.Run(),
@@ -329,6 +333,83 @@ internal static class Program
         return options;
     }
 
+    private static RmOptions ParseRm(string[] args)
+    {
+        var paths = new List<string>();
+        var options = new RmOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--mode": options = options with { Mode = ParseMode(ArgParse.Value(args, ref i)) }; break;
+                case "--dry-run" or "-n": options = options with { DryRun = true }; break;
+                case "--from-stdin": options = options with { FromStdin = true }; break;
+                case "--reason": options = options with { Reason = ArgParse.Value(args, ref i) }; break;
+                case "--confirm-token": options = options with { ConfirmToken = ArgParse.Value(args, ref i) }; break;
+                case "--scan": options = options with { ScanId = ArgParse.Id(ArgParse.Value(args, ref i)) }; break;
+                case "--yes" or "-y": options = options with { Yes = true }; break;
+                case "--force": options = options with { Force = true }; break;
+                case "--json": options = options with { Json = true }; break;
+                case "--permanent": options = options with { Mode = Deletion.DeleteMode.Permanent }; break;
+                default: paths.Add(Positional(args[i])); break;
+            }
+        }
+
+        return options with { Paths = paths };
+    }
+
+    private static Deletion.DeleteMode ParseMode(string value) =>
+        Deletion.DeleteModes.TryParse(value, out var mode)
+            ? mode
+            : throw new ArgumentException($"--mode must be quarantine, recycle or permanent, not '{value}'");
+
+    private static long ParseOpId(string[] args)
+    {
+        if (args.Length == 0) throw new ArgumentException("restore needs an operation id (see 'pathmemo ops')");
+        if (args.Length > 1) throw new ArgumentException("restore takes one operation id");
+
+        // Both "118" and "op-000118" are what a person reads off the screen.
+        var text = args[0].StartsWith("op-", StringComparison.OrdinalIgnoreCase) ? args[0][3..] : args[0];
+        return ArgParse.Id(text.TrimStart('0').Length == 0 ? "0" : text.TrimStart('0'));
+    }
+
+    private static PurgeOptions ParsePurge(string[] args)
+    {
+        var options = new PurgeOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--expired": options = options with { Expired = true }; break;
+                case "--all": options = options with { All = true }; break;
+                case "--bin" or "--recycle-bin": options = options with { Bin = true }; break;
+                case "--yes" or "-y": options = options with { Yes = true }; break;
+                default: options = options with { OpId = ParseOpId([args[i]]) }; break;
+            }
+        }
+
+        return options;
+    }
+
+    private static int ParseOps(string[] args)
+    {
+        long? id = null;
+        var limit = 20;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--limit": limit = ArgParse.Count(ArgParse.Value(args, ref i)); break;
+                default: id = ParseOpId([args[i]]); break;
+            }
+        }
+
+        return QuarantineCommands.Ops(id, limit);
+    }
+
     private static AuditOptions ParseAudit(string[] args)
     {
         var options = new AuditOptions();
@@ -342,8 +423,8 @@ internal static class Program
                 case "--quiet" or "-q": options = options with { Quiet = true }; break;
                 case "--copy": options = options with { Copy = true }; break;
                 case "--copy-index": options = options with { Copy = true, CopyIndex = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
-                case "--apply":
-                    throw new ArgumentException("--apply is not implemented yet; remedies are shown and copied, never run (README section 6.3)");
+                case "--apply": options = options with { Apply = ArgParse.Value(args, ref i) }; break;
+                case "--yes" or "-y": options = options with { Yes = true }; break;
                 default: throw new ArgumentException($"unexpected argument '{args[i]}'");
             }
         }
@@ -387,6 +468,10 @@ internal static class Program
               tree [<path>]       one level of the last scan, largest first
               top [options]       largest files or directories, with filters
               audit [options]     space no scan can see: restore points, WinSxS, WSL, caches
+              rm <path>...        delete, into quarantine by default
+              restore <op-id>     put a quarantined operation back
+              purge [<op-id>]     free the space a quarantine is holding
+              ops [<op-id>]       the deletion journal
               history [options]   list stored scans
               diff [<a> <b>]      what changed between two scans (default: the last two)
               doctor              report what pathmemo can do on this machine
@@ -443,16 +528,39 @@ internal static class Program
 
             audit
               --id <probe>        one probe in full, with every remedy and path
+              --apply <probe>     carry out that probe's remedy: confirmed, journalled,
+                                  and elevated or refused
               --copy              with --id: put the first command on the clipboard
               --copy-index <n>    with --id: copy the n-th command instead
               --json              machine-readable report
               --quiet, -q         no progress line
-              Read-only: remedies are shown, never run. Run as administrator to
-              measure restore points and the component store.
+              The report itself is read-only. Run as administrator to measure
+              restore points and the component store.
+
+            rm
+              --mode <mode>       quarantine | recycle | permanent (default: config)
+              --permanent         same as --mode permanent
+              --dry-run, -n       show the plan and a confirmation token, change nothing
+              --from-stdin        read paths from standard input, one per line
+              --reason <text>     recorded in the journal
+              --scan <id>         verify sizes against that scan instead of the newest
+              --confirm-token <t> the token a dry run printed, for scripts
+              --yes, -y           skip the y/n question (never the typed confirmation)
+              --json              machine-readable plan or result
+              Quarantine is a rename on the same volume: it frees nothing until
+              'pathmemo purge'. Permanent frees the space and cannot be undone.
+
+            purge
+              <op-id>             one operation      --expired   only what has aged out
+              --bin               empty the Recycle Bin instead
+              --yes, -y           skip the confirmation
+
+            ops
+              <op-id>             the items of one operation
+              --limit <n>         rows to show (default 20)
 
             Not implemented yet (see README.md for the full command set):
-              reclaim, dupes, rm, restore, purge, ops,
-              errors, export, schedule, config
+              reclaim, dupes, errors, export, schedule, config
             """);
         return ExitCode.Ok;
     }

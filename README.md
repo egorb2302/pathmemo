@@ -16,6 +16,7 @@ pathmemo scan            # scan every fixed volume
 pathmemo top --min 1GB   # largest files
 pathmemo audit           # where the invisible space went
 pathmemo diff            # what changed since the previous scan
+pathmemo rm <path>       # delete, into quarantine by default (restore, purge, ops)
 ```
 
 Administrator rights are optional but change what the tool can see: with them the scanner reads `$MFT` directly — roughly 40x faster, and it sees paths a directory walk is denied (§4.1).
@@ -31,15 +32,15 @@ Administrator rights are optional but change what the tool can see: with them th
 | P3 | MFT scanner, hard-link dedup in both scanners, ADS, volume reconciliation, `--scanner` | **done** — 1.27M files in 9.6 s, 1.4% unaccounted |
 | P4 | SQLite (schema §11, WAL), history, `diff`, `--format json\|csv`, `--data-dir` | **done** — diff of two 1.6M-node snapshots in 105 ms |
 | P5 | TUI: Overview + Tree, own renderer, `status` | **done** — 0.1–0.6 ms per frame, 56 ms to search 1.58M nodes |
-| P6 | Deletion: PathGuard, HandleTreeDeleter, quarantine | not started |
+| P6 | Deletion: PathGuard, HandleTreeDeleter, quarantine, journal, `rm` / `restore` / `purge` / `ops`, `audit --apply` | **done** — canary intact after 10k junction-swap races (19,478 swaps, 114 s) |
 | P7 | Reclaim rules | not started |
 | P8 | Duplicates | not started |
 | P9 | USN incremental scan, scheduling | not started |
 | P10 | Polish, NativeAOT | not started |
 
-156 tests green.
+211 tests green.
 
-**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. The TUI shows and marks but deletes nothing: `d` and `K` name the phase they arrive in. An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20).
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. No incremental USN scan yet (P9). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. Deleting works, but the rules that would *recommend* what to delete are P7, and `K` (keep-list) still names its phase. An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20).
 
 ---
 
@@ -487,7 +488,7 @@ Volume C:   476.1 GB total   ·   21.3 GB free   ·   95.5% used
 - **Two numbers, both nullable.** WSL and Docker know `UsedBytes` and not `ReclaimableBytes` (free space inside a vhdx is visible only from inside, and booting a distro to ask is not a read-only act), so they land in a `WORTH A LOOK` section rather than the `RECLAIMABLE` total. `pagefile` is special: reclaimable equals its size if another fixed volume has > 20 GB free, and the probe suggests moving it there; otherwise 0.
 - **Directory measurement** (`DirectoryMeasure`): size on disk is the logical size rounded up to the cluster, and `GetCompressedFileSize` is called only for files flagged `Compressed` or `SparseFile`. The attributes are already in the enumeration buffer, so this is free: measuring a 175k-file `%TEMP%` took 20 s with a call per file and ~3 s without. Reparse points are neither counted nor entered; access errors are counted, not thrown — "a lower bound plus a note" beats an empty result.
 - **External tools** (`ExternalTool`): `%WINDIR%\System32\*` by absolute path only, no window, no `__COMPAT_LAYER`, timeout with `Kill(entireProcessTree)`, output decoded in the console OEM code page. Two invocations in the whole audit, both elevated-only: DISM (`/English` pins the format) and `powershell.exe` for CIM.
-- **`--apply` is deferred to P6**: a command that changes the system belongs in the operations journal (§9.7), which does not exist yet. What exists is `--copy` / `--copy-index <n>` (§15.1) and `c<n>` interactively.
+- **`--apply` arrived with P6**, once there was an operations journal (§9.7) to put it in. It is confirmed, it refuses rather than degrades when it lacks the rights a remedy declares, and it records what the free space actually did. `--copy` / `--copy-index <n>` (§15.1) and `c<n>` interactively remain the way to take a command elsewhere.
 - **Unelevated**, VSS, DISM, `Minidump`, `Defender\Scans\History` and part of `Windows\Logs` cannot answer; 16 of 21 probes still do, in 4.1 s.
 - *P4:* a full run writes to `audit_findings` (§11) tied to the scan the probe used — 17 rows out of 21 on a real machine, since `not applicable` is not recorded. A single probe (`--id`) writes nothing: a spot check, not a point of history.
 
@@ -797,7 +798,7 @@ op-000118  2026-09-17T14:22:08Z  quarantine  47 items  18.2 GB  reclaimed 0 B
   47 succeeded, 0 failed
 ```
 
-Each item is a row in `deletion_items`. Dry runs go to a **separate table**, `dryrun_log`: mixing real and rehearsed deletions in one journal makes the audit untrustworthy.
+Each item is a row in `delete_items` (§11). Dry runs go to a **separate table**, `dryrun_log`: mixing real and rehearsed deletions in one journal makes the audit untrustworthy.
 
 ### 9.8. Measuring what was actually freed
 
@@ -812,6 +813,19 @@ Done in 1.4 s
 ```
 
 and after the purge, `Predicted: 18.2 GB → Actual: 18.4 GB, C: free 21.3 → 39.7 GB`. A divergence over 10% is logged and shown: the only way to notice that the size model is lying.
+
+### 9.9. Implementation notes (P6)
+
+- **Two classes of protected path, not one.** §9.3's list mixes the operating system's own directories with the structural ones, and treating them alike breaks the tool either way: seal `%LOCALAPPDATA%` and a 44 GB WSL disk becomes undeletable; unseal `C:\Users` and so does nothing. So `Windows`, `System32`, `Program Files`, `ProgramData`, `Fonts`, `Startup` and the Start menu are **sealed** — nothing inside them goes without an `allowInsideProtected` rule — while the profile, `AppData\Roaming`, `AppData\Local`, `C:\Users` and `Public` are **anchors**: the directory itself is refused, its contents are ordinary. Volume roots and everything directly under them are refused separately, so `D:\games` is safe from a typo while `D:\games\old` is not.
+- **A whitelist opens contents, never its own anchor.** `%WINDIR%\Temp\**` makes what is in `Temp` deletable and leaves `Temp` itself protected; Windows expects that directory to exist. The rule lives in the protected set rather than in the glob syntax, so `**` keeps one meaning everywhere (§12.2).
+- **A link is judged by where it points.** `C:\Users\All Users` opened with `FILE_FLAG_OPEN_REPARSE_POINT` canonicalises to itself, which no rule would catch; so a reparse point is opened a second time *following* the link and the target is checked too. That is what refuses the compatibility junctions in §9.3's table rather than a list of their names.
+- **Rename by handle, at the NT layer.** Quarantine moves with `NtSetInformationFile` / `FileRenameInformation` and the destination directory's handle in `RootDirectory` — not `MoveFileWithProgressW`, which takes paths and would resolve the source again after the guard has checked it. The Win32 wrapper `SetFileInformationByHandle` cannot be used here: it rejects a non-null `RootDirectory` with `ERROR_INVALID_PARAMETER`, measured on every buffer shape. A rename cannot cross volumes, so a quarantine on the wrong disk fails with `ERROR_NOT_SAME_DEVICE` instead of quietly becoming an 18 GB copy.
+- **The listing is a hint; the handle is the fact.** The recursive deleter reads each child's attributes from the handle it just opened rather than from the directory enumeration, because the swap this module exists to survive happens in exactly that window. With it, a directory that became a junction between the two calls is deleted as a link. The race test runs the attack for real: 10,000 rounds, 19,478 junctions actually swapped in, canary intact, 114 s (§22.3).
+- **Modes are three code paths, not three implementations of one interface.** They do not share a contract: quarantine needs the operation id and a per-volume store handle before the first item, the Recycle Bin takes the whole batch at once on an STA thread, permanent works item by item. One interface would have been three different contracts wearing one name (§17.2).
+- **Plan, then check again.** The plan is computed with query-only handles and is what the dialog, `--dry-run` and the confirmation token all describe. Execution reopens every item with delete access and re-verifies that the canonical name still matches and the size has not moved — the plan may be minutes old by the time a human answers. The size is compared against the *stream* length, not the cluster-rounded on-disk figure the plan carries; conflating the two rejected every file that was not cluster-aligned, which is most of them.
+- **No journal, no deletion.** Everywhere else a busy database is a warning and the work proceeds (§11.1). Here it is a refusal with exit code 8: "every operation has a journal entry" is the promise the rest of this rests on. The row is written before the first item and closed after the last, so a process killed halfway leaves `running` rather than silence.
+- **`audit --apply` at last.** A remedy that deletes paths goes through this same engine and removes the *contents* of the directories a finding names, never the directories. A remedy that runs a command needs the rights it declares or refuses, needs a typed `apply <id>` when its risk is above `safe`, and is journalled with the free-space change. The Recycle Bin finding uses `SHEmptyRecycleBin` rather than shelling out to PowerShell to do the same thing one layer further away.
+- **The Recycle Bin is the one place we work from paths.** `IFileOperation` parses a path and offers no handle-taking entry point, so that mode carries a weaker guarantee than the other two — one more reason quarantine is the default. Success there is any `HRESULT` with the severity bit clear, not `S_OK`: the copy engine answers with its own codes (`COPYENGINE_S_DONT_PROCESS_CHILDREN`, 0x00270008) and reading those as failures reports working deletions as failed.
 
 ---
 
@@ -1022,7 +1036,7 @@ Snapshot writing batches 20k rows for aggregates and runs `PRAGMA wal_checkpoint
 - **`integrity_check` only after a dirty exit**, via the `.clean` marker; on a real database it takes milliseconds and never runs in a normal cycle.
 - **`--no-save` writes not one row.** Otherwise a scripted JSON export would quietly fill up the history.
 - **Aggregates.** Eight categories, plus the 250 largest extensions and a `(rest)` row — a full disk has tens of thousands of distinct suffixes. The category is inherited from the directory (`C:\Windows` → system, `node_modules` → cache) and only then taken from the extension: `C:\Windows` is full of `.wav` files that are not the user's media. NTFS metafiles at a volume root are system too, but only at the root — a user file is entitled to be called `$draft`. Computed once per scan and sent to the database, the `By category` block and the JSON alike. On a real C: (walk, 1.22M files, 197 GB): system 62.5 GB, other 49.8, cache 34.5 (613k files), app 34.2, archive 12, source 2.6, media 1.7, document 0.2.
-- **Still NULL:** `metadata_bytes`, `usn_journal_id`, `next_usn` arrive with P9; `dryrun_log`, `delete_*`, `dupe_*`, `file_hashes` with P6 and P8.
+- **Still NULL:** `metadata_bytes`, `usn_journal_id`, `next_usn` arrive with P9; `dupe_*` and `file_hashes` with P8. *P6:* `delete_ops`, `delete_items` and `dryrun_log` are written, and a deletion refuses to run at all when the database cannot be opened (§9.9).
 
 ---
 
@@ -1074,7 +1088,9 @@ The config lives in `%LOCALAPPDATA%`, writable by an ordinary user, while an MFT
 - the config file's DACL is checked: if anything wider than `Administrators` / `SYSTEM` / the owner can write it, a warning is printed and `rules.custom`, `protect.*` and everything else affecting deletion is **ignored**;
 - **there is no "run a command after cleanup" key**, and there never will be.
 
-*Implemented in P4:* the same rule covers `--data-dir`, the only override that currently exists. When elevated it prints a warning and is ignored: a command-line argument from an administrator is the same arbitrary-write primitive as a config key. `config.json` is not read at all yet.
+*Implemented in P4:* the same rule covers `--data-dir`. When elevated it prints a warning and is ignored: a command-line argument from an administrator is the same arbitrary-write primitive as a config key.
+
+*P6:* `config.json` is read, for the `protect` and `delete` sections. While elevated its DACL is checked first, and if anything outside `Administrators` / `SYSTEM` / the owner can write the file it is ignored with one warning — an unprivileged user must not be able to stage `"allowInsideProtected": ["**"]` for an elevated process to obey. A file that will not parse yields the defaults and a warning rather than a failure to start; an unusable single value warns about that key alone and keeps its default.
 
 ### 12.2. Globs, not regex
 
@@ -1100,8 +1116,8 @@ pathmemo reclaim [options]                 cleanup recommendations
 pathmemo dupes [options]                   duplicate search
 pathmemo rm <path>... [options]            deletion (quarantine by default)
 pathmemo restore <op-id>                   restore from quarantine
-pathmemo purge [<op-id>|--expired|--all]   delete the quarantine for real
-pathmemo ops [--limit N]                   deletion journal
+pathmemo purge [<op-id>|--expired|--bin]   free what a quarantine (or the bin) holds
+pathmemo ops [<op-id>] [--limit N]         deletion journal
 pathmemo history [--limit N] [--since <date>]
 pathmemo diff <id-a> <id-b>
 pathmemo errors <scan-id>
@@ -1125,6 +1141,8 @@ pathmemo doctor                            rights, USN, filesystem, database, ve
 ```
 
 *P4:* `--data-dir` is stripped from the arguments before the command is parsed, so it works with any of them, and when elevated it warns and is ignored (§12.1). `--json` exists on `scan`, `diff`, `history` and `audit`; `--size` on `tree`, `top` and `diff`.
+
+*P6:* `--yes` works on `rm`, `purge` and `audit --apply`, and never answers the typed confirmation that a large permanent deletion demands - that is what `--confirm-token` is for. `--json` covers `rm`, as a plan before the fact or a result after it.
 
 *P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `--no-color` is not parsed as an option yet, but `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
 
@@ -1183,6 +1201,8 @@ pathmemo rm <path>...
 
 `--confirm-token` answers "how do you automate a dangerous operation without making `--yes` a skeleton key": the dry run prints a token derived from the exact list of paths and sizes, and if anything changed the token is invalid.
 
+*P6:* all of the above except `--force`, which is accepted as a synonym for `--yes` until the risk axis it belongs to arrives with the reclaim rules in P7. The token is ten base32 characters over the canonical paths, sizes and modification times, sorted - so the same list in another order is the same token, and one extra byte in one file is not. `--permanent` is a spelling of `--mode permanent`, and `pathmemo delete` of `pathmemo rm`.
+
 ### 13.5. Exit codes
 
 | Code | Constant | Meaning |
@@ -1201,6 +1221,8 @@ pathmemo rm <path>...
 
 `--json` emits an object with `"schemaVersion": 1`. Fields are only ever added within a major version. Anything that is not data goes to stderr. Numbers are bytes as integers, not strings; times are ISO-8601 UTC with `Z`.
 
+*P6:* `rm --json` emits the plan (with its token and every refusal and its reason) when nothing is to be done or `--dry-run` is given, and the per-item result otherwise.
+
 *P4:* the contract is pinned by tests on `scan --format json` and on CSV quoting. The writer is a hand-written `Utf8JsonWriter` with no serializer: reflection is what makes a trimmed build fail at runtime instead of at build time (§18).
 
 ---
@@ -1218,7 +1240,9 @@ pathmemo rm <path>...
 
 `1`…`5` switch. Modals: `Details`, `Confirm delete`, `Search`, `Help`, `Sort`.
 
-*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm` (its only consumer so far is opening a file, but it will serve deletion in P6). `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in.
+*Implemented in P5:* screens 1 and 2, the `Details`, `Search`, `Help` and `Sort` modals, plus a shared `Confirm`. `3` opens the line-based audit view from P2; `4` and `5` say honestly which phase they arrive in.
+
+*P6:* the delete modal is its own view rather than a `Confirm`, because it has state: `Tab` cycles the mode and every line - what it frees now, what it frees on purge, what undo costs - is recomputed from a fresh plan, not patched. `L` lists the items and the guard's refusals. It hands off to the ordinary console to run, where the progress line, the confirmation and the free-space report belong (§14.6).
 
 **Settings** is not a screen (a JSON editor in a terminal is days of work for nothing; `c` opens the config in an external editor and `F5` reloads), nor is **Errors** (a counter on Overview plus `pathmemo errors`), nor **History/Diff** (CLI, with a sparkline on Overview).
 
@@ -1312,9 +1336,9 @@ Logs go **to a file only**, never to stdout or stderr while the TUI is up. With 
 
 **Search covers the whole snapshot, not the current directory** — otherwise it is useless, because what is being looked for is five levels down. Names are decoded into a `stackalloc` buffer rather than materialised as strings: 1.58M short strings would cost more in collections than the search itself (§17.3). Up to 2000 matches sorted by size; `n`/`N` jump between them, clearing the filter if it hides a hit.
 
-**Marks (`x`, `a`, `X`) are implemented; deletion is not.** `d` and `K` name the phase they arrive in instead of silently doing nothing. Marks are stored as node indices and cleared on any snapshot change: an index pointing into a different tree is the worst kind of bug for a deletion list.
+**Marks (`x`, `a`, `X`) are stored as node indices and cleared on any snapshot change:** an index pointing into a different tree is the worst kind of bug for a deletion list. *P6:* `d` and `Shift+D` open the delete dialog for the marks, or for the row under the cursor when there are none. The paths come out of a snapshot that may be days old, and the guard opens and re-checks every one of them - so a stale tree costs a refusal, never the wrong file. `K` still names its phase.
 
-**`o` refuses to launch executables** (§15.3) before any dialog, not "with a warning". Everything else gets a confirmation showing the sanitised name, the real extension and a mark-of-the-web note. `y` confirms, **not** Enter: a dialog that appears under a finger already travelling towards Enter is not a confirmation. The P6 deletion dialog inherits the rule. `e` opens Explorer through `SHParseDisplayName` + `SHOpenFolderAndSelectItems` (§15.2).
+**`o` refuses to launch executables** (§15.3) before any dialog, not "with a warning". Everything else gets a confirmation showing the sanitised name, the real extension and a mark-of-the-web note. `y` confirms, **not** Enter: a dialog that appears under a finger already travelling towards Enter is not a confirmation. The delete dialog inherits the spirit of it - `Enter` proceeds there only after `Tab` and `L` have had the chance to change what proceeding means, and a large permanent deletion still has to be typed out in the console. `e` opens Explorer through `SHParseDisplayName` + `SHOpenFolderAndSelectItems` (§15.2).
 
 **Overview and `pathmemo status` collect the same data** (`StatusReport`): free space comes from the volume and is always current, everything else comes from the last scan and is dated, so every stored number carries its scan id. A locked database costs the history block and nothing else. The sparkline scales between its minimum and maximum rather than from zero: a disk that went from 401 to 409 GB would otherwise be a flat line, which is precisely what such a row must not do.
 
@@ -1385,7 +1409,7 @@ Every row is a real scenario, not a theoretical one.
 | T15 | The tool filling the disk | Binary snapshots of 10–25 MB and a hard 400 MB cap (§5.4) |
 | T16 | Recursive growth — pathmemo scans its own data, grows, scans again | Flagged `SelfData`, excluded from reclaim, undeletable except by `purge` |
 | T17 | The process killed mid-save — `Console.CancelKeyPress` is time-limited | The handler only sets a token; the main thread writes with a timeout; a second `Ctrl+C` is a hard exit (§4.8) |
-| T18 | Symlink loop — `AppData\Local\Application Data` pointing at itself | Reparse points are never entered, plus a depth limit of 512 |
+| T18 | Symlink loop — `AppData\Local\Application Data` pointing at itself | Reparse points are never entered, plus a depth limit (256 levels; a real `node_modules` chain runs to about 40) |
 | T19 | Deleting in-use files breaks an application | `NumberOfLinks` and sharing checked; `FILE_DISPOSITION_POSIX_SEMANTICS`; a "close <app> first" warning on known rules |
 | T20 | Concurrent pathmemo processes writing to one database | WAL plus `busy_timeout`, and a refusal to write with a warning while still saving the snapshot. *P4:* no mutex needed — WAL serialises writers, and snapshots use different numbers |
 
@@ -1402,11 +1426,13 @@ pathmemo/
 │   │
 │   ├── Cli/
 │   │   ├── ArgParse.cs            value parsers: sizes, durations, dates, modes
-│   │   ├── Commands/              Scan, Tree, Top, Audit, History, Diff, Doctor,
-│   │   │                          Status (+ StatusReport, shared with Overview)
+│   │   ├── Commands/              Scan, Tree, Top, Audit (+ AuditApply), History, Diff,
+│   │   │                          Doctor, Status (+ StatusReport, shared with Overview),
+│   │   │                          Rm, Quarantine (restore / purge / ops)
 │   │   ├── Interactive/           Launcher, Browser, AuditView, ElevationPrompt
 │   │   │                          (line-based fallback for terminals without VT)
-│   │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv)
+│   │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv),
+│   │                              DeleteReport (plan, outcome, journal)
 │   │
 │   ├── Tui/
 │   │   ├── TuiHost.cs             input loop and render, suspended during a scan
@@ -1414,7 +1440,7 @@ pathmemo/
 │   │   ├── Terminal/              Screen (frame buffer + row diff), Line, KeyReader,
 │   │   │                          VirtualTerminal, TextWidth, Sanitizer, Draw
 │   │   ├── Screens/               OverviewScreen, TreeScreen
-│   │   └── Dialogs/               Details, Confirm, SortMenu, Help
+│   │   └── Dialogs/               Details, Confirm, Delete, SortMenu, Help
 │   │                              (search is TreeScreen state, not its own file)
 │   │
 │   ├── Scanning/
@@ -1440,10 +1466,15 @@ pathmemo/
 │   ├── Duplicates/                DuplicateFinder, HashPipeline, ByteComparer, HashCache
 │   │
 │   ├── Deletion/
-│   │   ├── IDeleteBackend.cs      ← justified: recycle|quarantine|permanent + test no-op
-│   │   ├── PathGuard.cs           CRITICAL: canonicalisation and the protected set
-│   │   ├── HandleTreeDeleter.cs   CRITICAL: handle-relative recursion
-│   │   └── QuarantineStore, RecycleBinBackend, PermanentBackend, FreeSpaceVerifier
+│   │   ├── PathGuard.cs           CRITICAL: open first, judge the handle
+│   │   ├── ProtectedSet.cs        CRITICAL: sealed vs anchor folders, keep, allow rules
+│   │   ├── Canonical.cs           volume-GUID names and segment-aware comparison
+│   │   ├── HandleTreeDeleter.cs   CRITICAL: handle-relative recursion, POSIX unlink
+│   │   ├── Quarantine.cs          store layout, manifest, rename by handle, restore
+│   │   ├── RecycleBin.cs          IFileOperation on an STA thread, quota check
+│   │   └── DeleteEngine.cs        plan, re-check, execute, free-space delta
+│   │                              (no IDeleteBackend: the three modes do not share
+│   │                              a contract - see §9.9)
 │   │
 │   ├── Platform/                  Native/ (P/Invoke by DLL), Clipboard, ShellReveal,
 │   │                              FileLaunch, Elevation, KnownFolders, VolumeInfo,
@@ -1452,9 +1483,11 @@ pathmemo/
 │   ├── Storage/                   Database (PRAGMA, user_version, integrity_check),
 │   │                              Schema.sql (embedded, all of §11), ScanCatalog
 │   │                              (file-vs-row reconciliation, id allocation),
-│   │                              ScanRecords, ScanRepository, AuditRepository
+│   │                              ScanRecords, ScanRepository, AuditRepository,
+│   │                              DeleteRepository (ops, items, dry runs)
 │   │
-│   └── Config/                    AppConfig, ConfigLoader (+ DACL check), DefaultRules
+│   └── Config/                    AppPaths, AppConfig (+ DACL check when elevated),
+│                                  PathGlob (one syntax, ** and %VARS%), DefaultRules
 └── tests/PathMemo.Tests/
 ```
 
@@ -1572,7 +1605,7 @@ git push origin v0.2.0
 
 ### 19.4. NativeAOT — a Phase 3 goal
 
-With Dapper, DbUp, Terminal.Gui and Blake3 out of the picture, the AOT road is open: `PublishAot=true` should give **~12 MB and a 15 ms start** instead of 120. *At P5* the `System.CommandLine` blocker is gone — it was never added — and the TUI is dependency-free and ports as is. What remains is `Microsoft.Data.Sqlite` (AOT-compatible via `SQLitePCLRaw`, needs verifying) and the COM interop that arrives with deletion in P6.
+With Dapper, DbUp, Terminal.Gui and Blake3 out of the picture, the AOT road is open: `PublishAot=true` should give **~12 MB and a 15 ms start** instead of 120. *At P5* the `System.CommandLine` blocker is gone — it was never added — and the TUI is dependency-free and ports as is. What remains is `Microsoft.Data.Sqlite` (AOT-compatible via `SQLitePCLRaw`, needs verifying). *At P6* the COM interop landed without closing that road: `IFileOperation` is declared with `GeneratedComInterface` and the sink with `GeneratedComClass`, so the marshalling is source-generated rather than reflected.
 
 ---
 ## 20. Performance budgets
@@ -1627,16 +1660,16 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [ ] Every finding shows a remedy marked `[admin]` / `[reboot]`, copyable.
 - [ ] No probe changes the system; a failed `DISM` parse yields `unknown`, never `0 bytes`.
 
-**Deletion** (all P6)
-- [ ] No protected path is deleted, including `c:\windows`, `C:\WINDOW~1`, `\\?\C:\Windows`, `\\localhost\c$\Windows`, `C:\Users\All Users\...`, `C:\Users\..\Windows`.
-- [ ] Swapping a subdirectory for a junction mid-delete does not escape the tree (race test).
-- [ ] A file changed between scan and deletion aborts the operation.
-- [ ] Quarantine moves 18 GB in < 3 s (rename, not copy); onto another volume it is refused clearly.
-- [ ] `restore` returns the tree to its original paths; `purge` frees space within 10% of the prediction.
-- [ ] A file over the bin quota never enters `recycle` mode and is never destroyed silently.
-- [ ] `--dry-run` moves nothing and writes to `dryrun_log`, not `delete_ops`.
-- [ ] Permanent deletion over 1 GB needs a typed confirmation `--yes` cannot bypass.
-- [ ] Every operation has a journal entry with per-item results.
+**Deletion**
+- [x] No protected path is deleted, including `c:\windows`, `C:\WINDOW~1`, `\\?\C:\Windows`, `\\localhost\c$\Windows`, `C:\Users\All Users\...`, `C:\Users\..\Windows` — twelve spellings, each opened and refused on the real machine.
+- [x] Swapping a subdirectory for a junction mid-delete does not escape the tree — 10,000 rounds, 19,478 junctions actually swapped in, canary intact (§22.3).
+- [x] A file changed between scan and deletion aborts the operation — checked against the snapshot when the plan is built, and against the handle again when it runs.
+- [x] Quarantine is a rename, not a copy, and onto another volume it is refused clearly — `ERROR_NOT_SAME_DEVICE` becomes that sentence. The 18 GB timing is not measured yet; a rename does not depend on the size.
+- [x] `restore` returns the tree to its original paths and refuses when something else has taken the name; `purge` frees the space, measured against the volume rather than assumed.
+- [x] A file over the bin quota never enters `recycle` mode and is never destroyed silently — the quota is read before the mode is chosen, and the mode falls back to quarantine with the reason on screen.
+- [x] `--dry-run` moves nothing and writes to `dryrun_log`, not `delete_ops`.
+- [x] Permanent deletion over the threshold needs a typed confirmation `--yes` cannot bypass; a script uses the token from a dry run of that exact list.
+- [x] Every operation has a journal entry with per-item results — and no journal means no deletion.
 
 **Duplicates** (all P8)
 - [ ] A hard-link set is shown apart from duplicates, with a saving of 0.
@@ -1648,8 +1681,8 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 **CLI**
 - [x] Redirected stdout disables the TUI and prints `status`.
 - [x] `--json` emits valid JSON and nothing else, warnings on stderr — tests on the §13.6 contract.
-- [ ] Exit codes follow §13.5 — all but `EX_UNSAFE`, which arrives with deletion.
-- [ ] `top --paths-only | rm --from-stdin --dry-run` works as a pipe.
+- [x] Exit codes follow §13.5 — `EX_UNSAFE` is what a guard refusal and a stale token return.
+- [x] `top --paths-only | rm --from-stdin --dry-run` works as a pipe.
 - [ ] `doctor` reports elevation, filesystems, USN state, integrity, version, free space — everything except USN state (P9).
 
 **TUI**
@@ -1668,8 +1701,8 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] An unclean exit triggers `integrity_check` on the next start, a clean one does not — unit-tested both ways.
 - [x] A corrupted `.pmsnap` does not break the application: `history` prints `deleted`, `diff` refuses with an explanation.
 - [ ] The data directory never exceeds 500 MB (retention is implemented; the 100-scan run is not done).
-- [ ] A corrupted `config.json` gives a warning and defaults, not a crash.
-- [ ] An elevated run ignores config paths — done for `--data-dir`; `config.json` is not read yet.
+- [x] A corrupted `config.json` gives a warning and defaults, not a crash — and one bad value warns about that key alone.
+- [x] An elevated run ignores config paths — `--data-dir` always, and the whole file when its permissions let anyone else write it (§12.1).
 
 ---
 
@@ -1680,6 +1713,8 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 Pure logic, no filesystem: `RuleEngine` (glob matching, variable expansion, `keep` precedence); `PathGuard.IsProtected` over **pre-canonicalised** strings, all twelve bypasses; `NodeStore` / `SnapshotFormat` round trips, boundaries and corrupted data; `DiffEngine` and `HardlinkResolver` over synthetic data; `DISM` and `vssadmin` parsers over fixed samples including non-English locales; size formatting, path truncation, CJK width, bidi sanitisation.
 
 *P4:* `SnapshotDiff` — 13 tests over synthetic trees (`TestTree` builds a `NodeStore` from a list of paths): the explaining level, splitting across children, residual rows, the threshold, appeared/disappeared, a name changing type, hard-link aliases, and rows plus remainder equalling the volume's change. `ScanAggregates` — category inherited from the directory, the extension cut-off. `ScanExport` — the JSON contract and CSV quoting. `Storage` runs against a real SQLite file in `%TEMP%` rather than in-memory: WAL, the `.clean` marker and file-versus-row reconciliation exist only on disk, and they are the subject. The suite runs serially because the data directory is one static path per process.
+
+*P6:* the protected set over canonical strings — the sealed-versus-anchor rule, the whitelist inside the blacklist and its anchor, the keep list, `$Recycle.Bin` and `System Volume Information`, the store and the one operation allowed into it. `PathGlob` per segment, `**`, name-only patterns and variable expansion. The confirmation token: same list in another order gives the same token, one byte or one mode different gives another. `AppConfig` — a good file, a broken one, and a file with one nonsense value. The filesystem half is in §22.2.
 
 *P5:* the terminal layer — 15 tests: CJK, emoji and combining-mark widths, `Fit` landing on exactly N columns, sanitisation, frame row diffing (an identical frame writes nothing, a changed row writes only itself), the erase-before-write order, colour suppression, sparkline scaling. The Tree screen — 14 tests that press keys and read the frame: row order, descending and returning to the same row, the size mode on a hard-link alias, the filter, search jumping into the match's directory, marks, refusing `.exe`, details, alignment under `U+202E` and CJK, a 200k-entry directory drawing exactly one page, `g`/`G`, narrowing to 80 columns. Frames are asserted as uncoloured text: assertions about escape sequences would test the colour scheme, not the behaviour.
 
@@ -1702,9 +1737,13 @@ two links to one file in different directories
 
 It checks traversal, sizes, dedup, errors, and above all **that deletion never leaves the tree**.
 
+*P6:* the twelve spellings of a protected path, each opened against the real machine, plus the property they rest on — the aliases of one directory canonicalise to one name. A tree deleted around a junction, with the junction's target untouched afterwards. A read-only file. A file another process holds open, unlinked while that handle still reads its data. Quarantine, restore, a restore refused because something took the name back, and purge. A dry run that moves nothing and lands in the right table. The scan-verification refusal, and its opposite. A file whose size is not a whole number of clusters — a regression that once rejected most files. One real item into the Recycle Bin through `IFileOperation`, because the apartment, the sink and the copy engine's own success codes cannot be faked.
+
 ### 22.3. Race test for T2
 
 Thread A deletes a tree recursively while thread B repeatedly swaps a subdirectory for a junction pointing at a guarded canary. After 10k iterations the canary must be intact. Without this test `HandleTreeDeleter` cannot be considered done.
+
+*P6:* implemented and run. Junctions are created through `FSCTL_SET_REPARSE_POINT` rather than `mklink`, or the race would be a contest between the deleter and the process loader. The full run: **10,000 rounds, 19,478 junctions actually swapped in, canary intact, 114 s**. The suite runs 600 rounds under a 20-second budget; `PATHMEMO_RACE_ITERATIONS` asks for the long version. The test also asserts that at least one swap landed — a round where the attacker never won the race would pass while testing nothing.
 
 ### 22.4. Comparison against a reference
 

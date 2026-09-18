@@ -352,13 +352,8 @@ internal sealed class TreeScreen : ITuiView
         if (key.Is('e')) return Reveal(session);
         if (key.Is('o')) return Open(session);
 
-        if (key.Is('d'))
-        {
-            session.Warn(session.Marks.Count > 0
-                ? $"deleting the {session.Marks.Count} marked entries arrives with P6 (quarantine, journal, dry-run)"
-                : "deletion arrives with P6; until then nothing here can remove a file");
-            return true;
-        }
+        if (key.Is('d')) return Delete(session, null);
+        if (key.Is('D')) return Delete(session, Deletion.DeleteMode.Permanent);
 
         if (key.Is('K'))
         {
@@ -485,6 +480,33 @@ internal sealed class TreeScreen : ITuiView
             _ => "directories and files",
         });
 
+        return true;
+    }
+
+    /// <summary>
+    /// Opens the delete dialog for the marked entries, or for the row under the cursor
+    /// (README section 14.3).
+    /// </summary>
+    /// <remarks>
+    /// The paths come from the snapshot, which may be minutes or days old; the guard opens
+    /// and re-checks every one of them before anything happens, so a stale tree costs a
+    /// refusal rather than the wrong file (README section 9.3).
+    /// </remarks>
+    private bool Delete(TuiSession session, Deletion.DeleteMode? mode)
+    {
+        var nodes = session.Marks.Count > 0 ? [.. session.Marks] : new List<int>();
+
+        if (nodes.Count == 0)
+        {
+            var node = Current;
+            if (node == NodeStore.NoNode) return true;
+            nodes.Add(node);
+        }
+
+        var paths = nodes.Select(node => session.Tree.GetPath(node)).ToList();
+        var engine = Deletion.DeleteEngine.Create();
+
+        session.Modal = new Dialogs.DeleteDialog(engine, paths, mode ?? engine.Config.Delete.DefaultMode);
         return true;
     }
 

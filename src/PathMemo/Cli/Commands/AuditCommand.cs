@@ -11,15 +11,19 @@ namespace PathMemo.Cli.Commands;
 /// <c>pathmemo audit</c>: the space no directory walk can see (README section 6).
 /// </summary>
 /// <remarks>
-/// Nothing here changes the system. Remedies are printed, and copied with <c>--copy</c>;
-/// running them is the user's act, in their own elevated prompt. <c>--apply</c> arrives
-/// with the operations journal in P6, because a command that changes the machine must be
-/// logged before it is offered (README section 6.3).
+/// Nothing in the report itself changes the system. Remedies are printed, and copied with
+/// <c>--copy</c>; running one is a separate, explicit act - <c>--apply</c>, which is
+/// confirmed, needs the rights it needs, and lands in the operations journal
+/// (README sections 6.3, 9.7).
 /// </remarks>
 internal static class AuditCommand
 {
     internal static int Run(AuditOptions options, CancellationToken ct)
     {
+        // --apply is a different command wearing the same verb: it runs one probe, then
+        // changes the system through the deletion engine and the journal (README section 9.7).
+        if (options.Apply is { } target) return AuditApplyCommand.Run(target, options.Yes, ct);
+
         var probes = AuditRunner.AllProbes();
 
         if (options.Id is { } id)
@@ -371,6 +375,11 @@ internal static class AuditCommand
 internal sealed record AuditOptions
 {
     internal string? Id { get; init; }
+
+    /// <summary>The finding whose remedy to carry out (README section 6.3).</summary>
+    internal string? Apply { get; init; }
+
+    internal bool Yes { get; init; }
     internal bool Json { get; init; }
     internal bool Quiet { get; init; }
     internal bool Copy { get; init; }

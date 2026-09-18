@@ -151,16 +151,26 @@ public class TreeScreenTests
     }
 
     [Fact]
-    public void Deleting_says_which_phase_brings_it_rather_than_doing_nothing_silently()
+    public void Deleting_opens_a_dialog_that_the_guard_has_already_had_its_say_in()
     {
+        // The first row of the sample tree is C:\Windows, which exists on the machine
+        // running this test and is protected. The dialog is built from a real plan, so it
+        // reports the refusal rather than offering a button that would fail
+        // (README sections 9.3, 14.3).
         var (view, session, screen) = Open(Sample());
 
         Press(view, session, 'x');
         Press(view, session, 'd');
         Render(view, session, screen);
 
-        Assert.Contains("P6", screen.TextAt(screen.Height - 2));
+        Assert.IsType<Tui.Dialogs.DeleteDialog>(session.Modal);
+        Assert.Contains("Nothing here can be deleted", Frame(screen), StringComparison.Ordinal);
+        Assert.Contains("the Windows directory", Frame(screen), StringComparison.Ordinal);
     }
+
+    /// <summary>The whole frame as one string, for assertions about panels.</summary>
+    private static string Frame(Screen screen) =>
+        string.Join('\n', Enumerable.Range(0, screen.Height).Select(screen.TextAt));
 
     [Fact]
     public void Executables_are_refused_without_a_dialog()

@@ -34,7 +34,7 @@ internal sealed class HelpDialog : ITuiView
         new("  Y             copy details         o         open file (confirmed)"),
         new("  x / space     mark                 a         mark all in view"),
         new("  X             clear marks          i         details"),
-        new("  d             delete marked        arrives with P6"),
+        new("  d             delete marked        Shift+D   delete permanently"),
         new("  K             add to keep-list     arrives with P7"),
         new("", Style.Plain),
         new("MISC", Style.Title),

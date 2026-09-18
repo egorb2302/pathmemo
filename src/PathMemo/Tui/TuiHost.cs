@@ -213,7 +213,7 @@ internal static class TuiHost
     {
         if (!File.Exists(AppPaths.ConfigPath))
         {
-            session.Warn($"no config file yet - it arrives with P7, in {AppPaths.DataDirectory}");
+            session.Warn($"no config file yet - create {AppPaths.ConfigPath} to set 'protect' and 'delete' (README section 12)");
             return;
         }
 

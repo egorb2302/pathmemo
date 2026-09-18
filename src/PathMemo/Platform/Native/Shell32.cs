@@ -39,6 +39,13 @@ internal static partial class Shell32
     internal static unsafe partial int SHOpenFolderAndSelectItems(
         nint pidlFolder, uint cidl, nint* apidl, uint dwFlags);
 
+    /// <summary>
+    /// Empties the bin on one volume, or on all of them when the path is null. The one
+    /// operation allowed to touch $Recycle.Bin (README section 9.3).
+    /// </summary>
+    [LibraryImport(Dll, EntryPoint = "SHEmptyRecycleBinW", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int SHEmptyRecycleBin(nint hwnd, string? pszRootPath, uint dwFlags);
+
     [LibraryImport(Dll, EntryPoint = "ILFree")]
     internal static partial void ILFree(nint pidl);
 }
