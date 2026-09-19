@@ -37,11 +37,11 @@ Administrator rights are optional but change what the tool can see: with them th
 | P7 | Reclaim rules: 31 rules as data, two axes, `reclaim` / `--rule` / `--apply`, keep-list, TUI screen 4 and badges | **done** — 1.2M nodes matched and 1,800 matches guard-checked in 2.5 s |
 | P8 | Duplicates: five stages, hash cache, `dupes` / `--group` / `--apply`, TUI screen 5 | **done** — stage 0 cut 1.23M files to 8,508 candidates in 0.44 s |
 | P9 | USN incremental scan, scheduling | **done** — 337 tests green; the rescan is checked against a full scan of the same real tree, and the elevated journal read is not verified on hardware (§4.5.1) |
-| P10 | Polish, NativeAOT | not started |
+| P10 | Polish, NativeAOT | **done** — lazy snapshot sections brought the TUI to **135 MB** against a 150 MB budget; `errors` / `export` / `config` finish §13; NativeAOT compiles clean but cannot be linked on the build machine (§19.4) |
 
-296 tests green.
+352 tests green.
 
-**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. An incremental rescan needs elevation too, because reading the change journal does — unelevated, every scan is a full one, and `doctor` says so (§4.5.1). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). An open snapshot holds ~200 MB against a 150 MB budget — lazy section loading in P10 (§20). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6).
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. An incremental rescan needs elevation too, because reading the change journal does — unelevated, every scan is a full one, and `doctor` says so (§4.5.1). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6). The published executable is still a framework-trimmed single file rather than NativeAOT: the code compiles to native with no warnings, but the machine that built this has no platform linker, so the 12 MB / 15 ms figure of §19.4 is a compilation that was never linked.
 
 ---
 
@@ -324,6 +324,12 @@ IoError                 0 paths
 
 In MFT mode the size behind `AccessDenied` **is known** — metadata is read past the ACL — so the exact figure is shown.
 
+*P10:* `pathmemo errors [<scan-id>]` prints that table for a stored scan, and then the paths themselves, `--limit` per kind and `--kind` for one of them. Three details decide whether such a list is usable:
+
+- **The path is never shortened.** Everywhere else a path is squeezed to fit a column; here it *is* the answer, and a list of paths with their middles removed is a list nobody can paste into anything.
+- **A message that only repeats its path is not printed.** The BCL's own text for a refused directory is `Access to the path '...' is denied`, which is the kind and the path again; under 527 entries it doubles the length of the output and adds nothing. A `Win32` code, or a message that says something else, is printed.
+- **The bytes are opt-in, because they cost the tree.** The error list is its own snapshot section, so the command normally reads a few hundred strings and nothing else — **12 ms against 206 ms** for the whole file (§5.5). `--sizes` opens the tree too and says how many of the refused paths are in it and what they hold: after an unelevated walk the honest answer is "all of them, holding 0 B", because a directory that would not open has nothing under it; after an MFT scan the bytes are real.
+
 ---
 
 ## 5. Snapshot format
@@ -407,6 +413,29 @@ Hard cap: snapshots\ <= 400 MB; over that, drop the oldest monthlies first,
 Scan metadata (a row in `scans`) lives forever — ~200 bytes, and it is what draws the used-space graph years back. The snapshot may already be gone: the row is then marked `snapshot_available = 0` and the scan is viewable as aggregates only.
 
 *Implemented in P4:* a snapshot dropped by retention clears `snapshot_path`, `history` prints `deleted` instead of a size, and `diff` refuses to open it with an explanation. The numbers remain.
+
+### 5.5. Reading only what is wanted (P10)
+
+§5.2 promised sections that are "compressed and indexed independently so a reader can load only what it needs". Until P10 the reader loaded all of them, and it did it the expensive way: each section was read into a `byte[]`, inflated into a second `byte[]`, and the node section was then copied out of that into twelve arrays. A 1.58M-node tree is 68 MB of arrays, so the peak held 68 MB of arrays plus a 68 MB packed copy plus the compressed bytes — which is exactly how an open snapshot came to hold 200 MB against a 150 MB budget (§20).
+
+Two changes, both in `SnapshotFile.Read`:
+
+- **Sections inflate straight into their destination.** The deflate stream reads through the file and `ReadExactly` fills each node array in turn, in the order the writer produced them. There is no packed intermediate at all. Object initialisers are evaluated in source order, which is what makes twelve positional reads correct — the same property the writer already relied on.
+- **A `SnapshotParts` flag says what the caller will actually read.** `Tree` (NODES, NAMES and ROOTS, which are one thing in practice), `Volumes`, `Errors`, `Usn`, or `Meta` for the header alone. A part that was not asked for is **empty rather than absent** — the tree is a shared `NodeStore.Empty` — so a caller that reads it gets nothing instead of an exception, and `SnapshotContents.Parts` says which of the two happened.
+
+Measured on a real 27 MB snapshot of C: (1,583,976 nodes, a 24 MB name blob), in-process, before and after:
+
+| | before | after |
+|---|---|---|
+| Time to open, everything | 226 ms | **181 ms** |
+| Working set the open snapshot costs | +165.6 MB | **+94.1 MB** — the tree itself, and nothing else |
+| Peak vs final working set | equal | equal — there is no transient left to peak on |
+| The ERRORS section alone | 211 ms (the whole file) | **0.8 ms** |
+| Whole process, `errors` | 206 ms | **12 ms** |
+| Whole process, RSS with the tree open (`tree`) | — | **121 MB** peak |
+| The TUI, tree open, real console | 182–201 MB | **134.9 MB** peak |
+
+The write path was left alone. Its transient is real too, but the budget it lives under (400 MB during a walk scan, 373 MB measured) is met, and a format writer that works is not worth rebuilding for a number that already passes.
 
 ---
 ## 6. Space Audit — the invisible space
@@ -1169,6 +1198,8 @@ Snapshot writing batches 20k rows for aggregates and runs `PRAGMA wal_checkpoint
 
 *P9:* the `scan` section is read, for `useUsnIncremental` alone. The other keys in it belong to behaviour that is not yet configurable, and a key that is read but ignored is worse than one that is not read at all.
 
+*P10:* the `export` section is read, for `redactPaths`, which is the default `export --redact` overrides per run. `pathmemo config` now answers the three questions this file raises without opening it — where it is, whether it is being obeyed, and which values are actually in force — and lists **only the keys the tool reads**, for the same reason: printing the whole document above would imply that all of it is honoured. `--edit` writes a documented template first if there is nothing to open, and every value in that template is already the default, so a fresh file changes nothing until something in it is changed. `--reset` moves the old file to `config.json.bak` rather than overwriting it: it may hold the only copy of a keep list somebody built up over months, and "reset" is a word people type faster than they read it. Both refuse to run elevated — an administrator process writing into a path derived from the user profile is the shape of the problem §12.1 is about, and an elevated run ignores most of the file anyway, so editing it from there would produce a document the writer would not obey.
+
 ### 12.1. Elevated mode ignores user config for paths
 
 The config lives in `%LOCALAPPDATA%`, writable by an ordinary user, while an MFT scan runs as administrator. A `logging.filePath` or `database.path` taken from that config would be **arbitrary file write as administrator** — a local privilege escalation. So whenever `IsProcessElevated()`:
@@ -1209,8 +1240,8 @@ pathmemo purge [<op-id>|--expired|--bin]   free what a quarantine (or the bin) h
 pathmemo ops [<op-id>] [--limit N]         deletion journal
 pathmemo history [--limit N] [--since <date>]
 pathmemo diff <id-a> <id-b>
-pathmemo errors <scan-id>
-pathmemo export <scan-id> --format json|csv --output <file> [--redact]
+pathmemo errors [<scan-id>] [--kind <kind>] [--limit N] [--sizes]
+pathmemo export [<scan-id>] [--format json|csv] [--output <file>] [--redact]
 pathmemo schedule [--weekly|--daily] [--time HH:MM] | --off | --status
 pathmemo config [--path | --edit | --reset]
 pathmemo doctor                            rights, USN, filesystem, database, version
@@ -1239,7 +1270,9 @@ pathmemo doctor                            rights, USN, filesystem, database, ve
 
 *P9:* `scan --full` turns off the incremental path for one run. There is no `--incremental`: a rescan is what a scan already is when it can be, and a flag asking for something the journal cannot deliver would only ever produce an error (§4.5.1).
 
-*P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `--no-color` is not parsed as an option yet, but `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
+*P5:* `status` prints the Overview screen's data as text — volumes with free space and unaccounted bytes, the last scan, the size of the store — and is what a bare `pathmemo` prints with stdout redirected (§14.5). `NO_COLOR` in the environment is honoured: no palette, selection still inverted.
+
+*P10:* `--no-color` is a real option now, and a **global** one: it is taken out of the argument list before the verb sees it, exactly as `--data-dir` is, so it works on every command instead of being an unknown option on nine of them. One switch decides, read in one place, so the flag and the environment variable cannot disagree. `--redact` on `export` is the only other new global-shaped flag, and it is deliberately not global: it means something only where an export happens.
 
 ### 13.2. `scan`
 
@@ -1324,6 +1357,24 @@ pathmemo rm <path>...
 
 *P4:* the contract is pinned by tests on `scan --format json` and on CSV quoting. The writer is a hand-written `Utf8JsonWriter` with no serializer: reflection is what makes a trimmed build fail at runtime instead of at build time (§18).
 
+*P10:* `errors --json` is schema 1 as well — `count`, `byKind`, and a `paths` array whose entries carry `path`, `kind`, `win32Code` and `message`, plus `allocatedBytes` when `--sizes` opened the tree. `export --format json` is the only document that is not a report: a header, the volumes, then one object per node in `entries`, and `entryCount` at the end so a truncated file is detectable without counting. It is written **unindented and flushed every 4,096 entries**, which is what keeps a 394 MB document at a few hundred kilobytes of buffer.
+
+### 13.7. `export`: the whole tree (P10)
+
+```
+pathmemo export [<scan-id>] [--format json|csv] [--output <file>] [--redact] [--yes]
+```
+
+Every other command answers a question. This one hands over the data and lets somebody else ask — one row per node, 1.58M of them for a real disk. That shape decides the rest of the design:
+
+- **It always writes a file.** 262 MB of CSV or 394 MB of JSON is not something to put on a terminal, and `--output` defaults to `%LOCALAPPDATA%\pathmemo\exports\scan-NNNN.csv` so a file that size cannot land in the working directory by accident. An existing file is not overwritten without `--yes`.
+- **It walks the tree once, with one string builder.** Depth-first with an explicit stack, pushing and popping one path segment at a time. `NodeStore.GetPath` per node would rebuild every ancestor 1.6M times; this way a whole-disk CSV takes **3.1 s** and the process peaks at **130 MB** — the tree, and buffers.
+- **`--redact` hashes each name and keeps everything else** (threat T13). The hash is of the lowercased name, so the same name is the same token everywhere: the shape of the disk, the sizes, the repetition and the depth all survive, which is what makes a redacted export still worth reading. A volume root stays as it is — `C:` is not private, and an export with no roots cannot be parsed at all. A **file** keeps its extension, because "which kind of file filled the disk" is the question exports exist for; a **directory** does not, because `$Recycle.Bin` has no extension in any useful sense and inventing `.Bin` for it would say something about the name while saying nothing about the contents. That distinction was a bug first: the first run redacted `C:\$Recycle.Bin` to `448edc267520.bin`.
+- **CSV carries a `flags` column** the summary CSV does not: `reparse`, `hardlink`, `cloud`, `sparse`, `self`, `encrypted`, `incomplete`. A reparse point counted as 0 and a hard link counted once are facts about the number in the row next to them, and a full export that omitted them would be quietly wrong.
+- **A leading `=`, `+`, `-` or `@` is defused with a quote.** §13.2's CSV can do without it because every field there is a path starting with a drive letter; here the same is true, but this is the file somebody opens in Excel, and a name like `=cmd.txt` is a real name.
+
+The export turned out to be the cheapest way to check several claims of §21 against a real disk, by counting flags over 1.58M rows: 3,750 sparse or compressed, 1,882 reparse points — every one of them 0 bytes with no children, which is the "junction causes no recursion" criterion — 1,394 hard-linked names, 527 incomplete directories, and 10 nodes of pathmemo's own store carrying `self`.
+
 ---
 ## 14. TUI
 
@@ -1396,6 +1447,8 @@ VIEW                               K      add to keep-list
 ```
 
 *P8:* on screen 5, `t` shows or hides the hard-link sets and `r` runs a search; `x` marks a copy for deletion and refuses on the last unmarked file of a group, and `K` puts a path on the keep list so it is never offered again.
+
+*P10:* `c` no longer says "create a file yourself" when there is nothing to open. It writes the same documented template `pathmemo config --edit` writes, then opens that — one door, one behaviour, and the message says which of the two happened.
 
 Bindings that were rejected: `Ctrl+C` for "copy path" — it is SIGINT, so a user with a hung network scan could not get out, and Windows Terminal intercepts it when there is a selection (`y` copies instead, like vim's yank); `Ctrl+Shift+C` — **intercepted by the terminal** in Windows Terminal, VS Code and ConEmu (`Y`); `Ctrl+1..6` for sorting — a digit with Ctrl has no VT sequence and cmd.exe does not deliver it (`s` opens a menu); `Ctrl+/` — delivered as `0x1F` only sometimes (`?`); `Ctrl+D` for delete — it is EOF and "page down" in most TUIs, a dangerous binding for a destructive act (`d` plus a dialog); `F10` to quit — conhost takes it as a menu, and tmux takes F-keys (`Q`).
 
@@ -1505,7 +1558,7 @@ Every row is a real scenario, not a theoretical one.
 | T10 | Hydrating cloud files — hashing a OneDrive placeholder **downloads** it, pulling 200 GB and filling the disk | `RECALL_ON_*`/`OFFLINE` checked before opening, plus `FILE_FLAG_OPEN_NO_RECALL` (§8.4). *P8:* two barriers, the scan's flag and the handle's attributes, and a test that asserts such a file is never opened |
 | T11 | Losing the only copy — every file in a duplicate group unmarked | "At least one survives" enforced in the core, not the UI (§8.4). *P8:* `Keeper.Survives` is consulted by the screen and by the command, and the command exits 6 rather than deleting |
 | T12 | Silent permanent deletion — a file over the Recycle Bin quota destroyed silently by the Shell | Our own quota check switches to Quarantine (§9.6) |
-| T13 | Leaking private data — an export is a full map of the disk: project names, people's names | `--redact` (hashed names, structure and sizes preserved); `logFilePaths: false` by default |
+| T13 | Leaking private data — an export is a full map of the disk: project names, people's names | `--redact` (hashed names, structure and sizes preserved); `logFilePaths: false` by default. *P10:* implemented, plus `export.redactPaths` for machines where every export should be hashed by default. Each segment becomes 12 hex digits of its lowercased name; a file keeps its extension, a directory does not, and the volume root stays readable. Asserted by a test that the original names appear nowhere in the output while the sizes, the depth and the repeated names all still do |
 | T14 | Corrupting our own database on power loss | WAL, `synchronous=NORMAL`, `integrity_check` **only after an unclean exit** |
 | T15 | The tool filling the disk | Binary snapshots of 10–25 MB and a hard 400 MB cap (§5.4) |
 | T16 | Recursive growth — pathmemo scans its own data, grows, scans again | Flagged `SelfData`, excluded from reclaim, undeletable except by `purge`. *P7:* the rule engine skips a `SelfData` node before it looks at its name, so no pattern can reach the store |
@@ -1530,13 +1583,17 @@ pathmemo/
 │   │   ├── ArgParse.cs            value parsers: sizes, durations, dates, modes
 │   │   ├── Commands/              Scan, Tree, Top, Audit (+ AuditApply), History, Diff,
 │   │   │                          Doctor, Status (+ StatusReport, shared with Overview),
-│   │   │                          Rm, Quarantine (restore / purge / ops), Reclaim, Dupes
+│   │   │                          Rm, Quarantine (restore / purge / ops), Reclaim, Dupes,
+│   │   │                          Schedule, Errors, Export (whole tree, hashed on
+│   │   │                          request), Config (where, honoured, in force)
 │   │   ├── Interactive/           Launcher, Browser, AuditView, ElevationPrompt
 │   │   │                          (line-based fallback for terminals without VT)
 │   │   └── Output/                SizeFormat, PathDisplay, ScanExport (json/csv),
 │   │                              DeleteReport (plan, outcome, journal),
 │   │                              ReclaimTable (rules, one rule's paths, json),
-│   │                              DupeTable (groups, one group, paths, json)
+│   │                              DupeTable (groups, one group, paths, json),
+│   │                              Colors (--no-color and NO_COLOR, one switch),
+│   │                              Diagnostics (PATHMEMO_DIAG=1, the numbers of §20)
 │   │
 │   ├── Tui/
 │   │   ├── TuiHost.cs             input loop and render, suspended during a scan
@@ -1560,7 +1617,9 @@ pathmemo/
 │   │   └── MediaTypeDetector.cs   HDD/SSD → parallelism
 │   │
 │   ├── Snapshots/                 SnapshotBuilder, SnapshotFile (.pmsnap sections and
-│   │                              header), SnapshotStore (numbering, retention),
+│   │                              header; SnapshotParts, and sections inflated
+│   │                              straight into the node arrays - §5.5),
+│   │                              SnapshotStore (numbering, retention),
 │   │                              NodeStore (SoA), NameBlob, TreeAssembly
 │   │
 │   ├── Analysis/                  TreeQuery, SnapshotDiff (merge join), FileCategory,
@@ -1671,7 +1730,7 @@ This project needs **one** complex screen (a virtualised tree), four simple ones
 
 | File | Size | Note |
 |---|---|---|
-| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) |
+| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) — and **25.70 MB at P10**: three commands, the lazy section reader and the diagnostics hook for 0.12 MB, which is what a codebase with no new dependencies costs |
 | `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
 | `pathmemo-win-x64.zip` | **10.6 MB** | exe + README + LICENSE, built by `build\publish.ps1 -Zip` |
 
@@ -1722,10 +1781,35 @@ git push origin v0.2.0
 
 With Dapper, DbUp, Terminal.Gui and Blake3 out of the picture, the AOT road is open: `PublishAot=true` should give **~12 MB and a 15 ms start** instead of 120. *At P5* the `System.CommandLine` blocker is gone — it was never added — and the TUI is dependency-free and ports as is. What remains is `Microsoft.Data.Sqlite` (AOT-compatible via `SQLitePCLRaw`, needs verifying). *At P6* the COM interop landed without closing that road: `IFileOperation` is declared with `GeneratedComInterface` and the sink with `GeneratedComClass`, so the marshalling is source-generated rather than reflected.
 
+#### 19.4.1. What P10 established, and what it could not
+
+**The three analysers are on permanently**, in an ordinary build rather than only at publish time:
+
+```xml
+<EnableAotAnalyzer>true</EnableAotAnalyzer>
+<EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+<EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+```
+
+With `TreatWarningsAsErrors` that turns every AOT hazard into a compile error, which is the only way the road stays open while the code grows: reflection over a type trimming will remove (IL2026), a path that needs runtime code generation (IL3050), an `Assembly.Location` that a single file does not have (IL3000). **The whole codebase passes with zero warnings.** That they are live and not silently disabled was checked the only way worth trusting — by writing the violations on purpose and watching the build fail with those three numbers, then deleting them again.
+
+**The AOT compiler itself runs clean over the whole dependency closure.** `Microsoft.Data.Sqlite` and `SQLitePCLRaw` were the open question of §19.4, and ILC compiled the application and everything it references to a 36.96 MB object file **without a single trim or AOT warning**. That is the answer to "needs verifying", as far as compilation goes.
+
+**What is not verified: the link, and therefore every number.** NativeAOT on Windows needs MSVC's `link.exe`, from the Desktop Development with C++ workload; this machine has the Windows SDK but no C++ toolchain, and installing several gigabytes of Visual Studio was not something to do to somebody's machine unasked. So there is no native executable, no size and no startup measurement — the "~12 MB and 15 ms" above remains a projection. On a machine that has the workload:
+
+```bash
+dotnet publish src/PathMemo/PathMemo.csproj -c Release -r win-x64 \
+  --self-contained true -p:PublishAot=true -o dist/aot
+```
+
+**And one design consequence, which matters more than the size.** AOT has no self-extracting host, so `e_sqlite3.dll` stops being a resource inside one file and becomes **a second file beside the exe**. Today's single file pays 15 ms once per version to extract it (§19.2); AOT would pay nothing and cost the promise on the first line of this document. That trade — 25 MB and one file against ~12 MB and two — is the decision P11 has to make, not a detail of the build.
+
 ---
 ## 20. Performance budgets
 
 Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defender on.
+
+*P10:* **`PATHMEMO_DIAG=1` is how these numbers are obtained**, with the shipped executable and no profiler. A budget nobody else can measure is a wish, so the hook is part of the tool: it prints the load and aggregate timings to stderr — never stdout, which `--json` promises carries nothing but the document — and a memory block with the live managed heap, the private bytes and the peak working set. It is wired into `scan`, `diff`, `tree`, `export` and the TUI, which prints it **after** giving the screen back, because a diagnostic line inside a frame is what §14.6 forbids.
 
 | Operation | Budget | Measured |
 |---|---|---|
@@ -1734,19 +1818,20 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 | Walk scan of C:, 1.2M files | < 150 s | **40–51 s** with hard-link dedup for files ≥ 1 MB (16k handles ≈ 3 s); 41 s without it at P3. The spread is filesystem cache state. Adding a 932 GB HDD costs fifteen minutes more, so every figure here is C: only |
 | Incremental USN scan | < 2 s | **not measured on hardware.** Reading the journal is administrator-only and the session that built this had no way to elevate (§4.5.1). What is measured is the part after the read: rebuilding a real tree from its changed directories agrees with a full walk scan of the same tree path by path and byte by byte, and copies the untouched nodes without re-interning a single name |
 | Writing a snapshot | < 1.5 s | **26 MB for 1.58M nodes** |
-| Opening an existing snapshot | < 300 ms | **~250 ms**, full decompression; lazy sections are not in yet |
+| Opening an existing snapshot | < 300 ms | **181 ms** for 1.58M nodes, everything decompressed - 226 ms before the sections were inflated straight into the node arrays (§5.5). The error list on its own is 0.8 ms, and the header alone is a 40-byte read |
 | Tree navigation, one frame | < 16 ms | **0.08 ms** in an ordinary directory, **0.6 ms** scrolling a 26k-entry one where every row changes; 4–7 ms for the first frame after a load |
 | Entering a directory with 200k children | < 50 ms | **10–15 ms** on the widest real directory (`WinSxS\Manifests`, 26,205 entries); a synthetic 200k one stays in budget. Children are contiguous, so only the sort is paid for |
 | Searching names across a snapshot | — | **56–69 ms** over 1.58M nodes, 402 matches for `node_modules` |
 | Overview / `status` data | — | **48–70 ms**: volumes, last scan, a used-bytes series over 40 scans |
 | Space Audit, all probes | < 8 s | **4.1 s** unelevated (21 probes, 175k files in temp); elevated adds DISM, 3–6 s |
-| Diff of two snapshots | < 500 ms | **105 ms** for the merge join on 1.58M and 1.67M node snapshots, 5 ms where one directory changed, plus 405 ms to load both |
+| Diff of two snapshots | < 500 ms | **105 ms** for the merge join on 1.58M and 1.67M node snapshots, 5 ms where one directory changed, plus 405 ms to load both - **341 ms at P10**, and 3 ms to compare two consecutive scans of C: |
 | Importing snapshots into a fresh database | — | **1.6 s** for 4 snapshots (106 MB, 6.5M nodes) |
 | Reclaim rules over a snapshot | < 3 s | **2.5 s** end to end on 1.22M nodes: the process, loading the snapshot, matching 31 rules, and opening a handle per match to ask the guard about all 1,800 of them. The TUI runs the matching alone, on a background thread, so no frame waits for it (§7.5) |
 | Category and extension aggregates | < 500 ms | **330 ms** over 1.58M nodes. The first version took 600 ms and +80 MB of peak: a linear scan of 200 extensions per file and a string per name. Now a hash lookup over a span and stack buffers (§17.3) |
 | RSS during an MFT scan | < 250 MB | an elevated peak measurement is still outstanding |
 | RSS during a walk scan | < 400 MB | **373 MB** peak working set (380 MB at P3, 478 MB with the first aggregates, 535 MB before file ids moved out of `RawEntry`). The live snapshot is 94 MB of that; the rest is transient GC heap |
-| RSS in the TUI with a snapshot open | < 150 MB | **not met: 182–201 MB** with a 1.58M-node snapshot open. The tree is 94 MB, and decompression doubles it: `SnapshotFile.Read` materialises each section into a whole `byte[]` before copying. Fixed by lazy section loading in P10. The early 103 MB estimate used a snapshot half the size and ignored the transient |
+| RSS in the TUI with a snapshot open | < 150 MB | **met at P10: 134.9 MB** peak working set with a 1.58M-node snapshot open, measured from outside the process in a real console (was 182–201 MB). The tree is 94 MB and there is no longer a copy of it: sections inflate into the node arrays rather than into a `byte[]` first (§5.5). `pathmemo tree`, which loads the same snapshot without the screens, peaks at **121 MB**. The early 103 MB estimate used a snapshot half the size and ignored the transient |
+| Exporting a whole scan | — | **3.1 s** for 1,583,976 CSV rows (262 MB) and **4.2 s** for JSON (394 MB), at a 130 MB peak: the tree, one string builder pushed and popped per segment, and a writer flushed every 4,096 entries (§13.7) |
 | Data directory size | **< 500 MB always** | hard limit |
 | Duplicate search, 1.2M files / 187 GB on C: | IO-bound | **5m18s**: stage 0 turned 1,228,950 files into 8,508 candidates in 0.44 s, and the disk did the rest — 39.6 GB read at ~125 MB/s with Defender on, not the 53.3 GB the candidates add up to, because the partial hash and the hard-link collapse take their share first. 1,347 duplicate groups (3,431 files, 9.94 GB) and 1,249 hard-link sets held out of the total. Second run, same disk: **1m29s** and 21.3 GB, 3,458 hashes from the cache |
 
@@ -1757,9 +1842,9 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 **Correct numbers**
 - [x] Scan + audit findings + metadata + unaccounted = the volume's used bytes, unaccounted < 2% — **MFT: 209 GB of 212, unaccounted 1.4%**; unelevated walk: 7.5%.
 - [ ] `C:\Windows` and `C:\` match WizTree within 1% — not compared yet; MFT gives 42.3 GB (WinSxS 6.94) against the walk's 43.4 GB (WinSxS 8.47).
-- [ ] A sparse `ext4.vhdx` shows allocated, not logical, with a `sparse` badge.
-- [ ] A cloud-only folder shows ~0 with a `cloud` badge, its logical size in details.
-- [ ] Switching `unique`/`allocated`/`logical` changes the numbers predictably.
+- [ ] A sparse `ext4.vhdx` shows allocated, not logical, with a `sparse` badge — the mechanism works and is counted (3,750 sparse or compressed nodes on this disk, the largest 72 MB allocated against 235 MB logical), but there is no WSL disk on this machine, so the `ext4.vhdx` case itself is untested.
+- [ ] A cloud-only folder shows ~0 with a `cloud` badge, its logical size in details — no OneDrive placeholder exists on this machine: a whole-disk export at P10 found **zero** `cloud` nodes, so the flag has never been seen set outside a test.
+- [x] Switching `unique`/`allocated`/`logical` changes the numbers predictably — on this disk: a compressed file is 72 MB unique and allocated against **235 MB logical** (`C:\Windows\servicing\Sessions\Sessions.back.xml`), and `WinSxS` is **8.47 GB unique against 8.52 GB logical**, the difference being the hard links held out. Checked through `top --size` on a real scan at P10.
 
 **Scanning**
 - [x] An MFT scan of 1M records finishes in < 10 s — 1.79M in 9.6 s.
@@ -1767,9 +1852,9 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] exFAT, FAT32 and network drives fall back to the walk scanner, per volume, trees spliced.
 - [x] Unreadable paths land in `scan_errors`, grouped; in MFT mode their size is known — MFT sees 53k more files and 38k more directories than an unelevated walk.
 - [ ] A rescan uses USN and finishes in < 2 s — built, and every part of it that does not need administrator rights is tested: the record parser over synthetic buffers, the refusal rules, and the rebuild against a full scan of the same real tree. The journal read itself, and therefore the timing, is unverified on hardware (§4.5.1).
-- [ ] `Ctrl+C` saves a partial result as `cancelled`; a second exits immediately.
-- [ ] A junction causes no recursion; the point shows with `reparse` and size 0.
-- [ ] The data directory is visible with a `self` badge.
+- [x] `Ctrl+C` saves a partial result as `cancelled`; a second exits immediately — verified at P10 by driving a real console: one Ctrl+C during a scan of `C:\Windows` printed `stopping - press Ctrl+C again to abort immediately`, finished the summary with `CANCELLED: totals are incomplete`, saved a 4.37 MB snapshot of 138,115 files, and left the row as `cancelled` with the `partial` flag. The *second* Ctrl+C was not exercised: the first one stopped the scan in well under a second, so there was no window to press it in.
+- [x] A junction causes no recursion; the point shows with `reparse` and size 0 — counted over a whole-disk export at P10: **1,882 reparse points, every one of them 0 bytes with 0 files under it**, and `C:\Documents and Settings` (the junction to `C:\Users`) appears exactly once in 1.58M rows, with nothing beneath it.
+- [x] The data directory is visible with a `self` badge — the export carries `self` on the store directory, the database and its WAL, the snapshots directory and every `.pmsnap` in it: 10 nodes, 132 MB, shown and never a deletion target.
 
 **Space Audit**
 - [ ] VSS, WinSxS, hiberfil, Recycle Bin, WSL and Docker vhdx, Windows Update cache, dumps and Windows.old are all found and sized.
@@ -1810,6 +1895,8 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] `--json` emits valid JSON and nothing else, warnings on stderr — tests on the §13.6 contract.
 - [x] Exit codes follow §13.5 — `EX_UNSAFE` is what a guard refusal and a stale token return.
 - [x] `top --paths-only | rm --from-stdin --dry-run` works as a pipe.
+- [x] Every command of §13 exists — `errors`, `export` and `config` were the last three, and the help text no longer has a "not implemented yet" list. *P10:* run against a real 27 MB snapshot: 527 refused paths grouped by kind in 12 ms, 1,583,976 rows exported to CSV and JSON, and a config template that parses back to exactly the defaults (asserted, so a typo in it cannot ship).
+- [x] `--no-color` is accepted by every command — stripped before the verb, like `--data-dir`; checked on `top`, `history`, `errors` and `status`, and the environment variable still means the same thing.
 - [x] `doctor` reports elevation, filesystems, USN state, integrity, version, free space — the `CHANGE JOURNAL` block names each NTFS volume's journal, its size, its next USN and whether the next scan can be incremental, with the reason when it cannot. Verified unelevated on a two-volume machine.
 
 **TUI**
@@ -1849,6 +1936,8 @@ Pure logic, no filesystem: `RuleEngine` (glob matching, variable expansion, `kee
 
 *P9:* the journal's records over synthetic buffers — a V2 record, a V3 record with its 128-bit ids, several in one buffer, a record reaching past the returned bytes (the earlier ones kept, the watermark still returned), a version this build does not know stepped over by its own length, a record claiming no length stopping the walk rather than spinning, and a buffer holding only the header. The refusal rules: no previous scan, a cancelled one, a snapshot with no watermark, a base that covered other roots. The rebuild over a fake disk that records which directories were opened — an untouched one is never opened at all, a file added, deleted or grown changes every total above it, a subtree moved in is walked in full although only its parent was named, a directory that cannot be read is unknown rather than empty, a reparse point is counted and not entered, children stay one contiguous range, and the untouched part keeps the name offsets it had. The name blob's seeding constructor, the watermark's snapshot round trip, and the scheduled task: the four settings that make it polite, a weekly schedule naming its day, the document read back as what was written, an ampersand in the install path, and something that is not a task document being no schedule rather than a crash. `--time` on a 24-hour clock whatever the locale, and `--day` in any case.
 
+*P10:* the snapshot's sections, which is where the memory win could most easily have become a corrupt tree: the error list read without the tree (and the tree still there when asked for), the header alone answering what kind of scan it was, an unrequested part being the shared empty tree rather than null, and a full read compared **array by array** against the original - all twelve of them, the roots, the name blob, and every name read back through its offset, because a byte-identical blob does not by itself prove the offsets still point into it. The export: one row per node plus a header, a name holding a comma and a quote, a name starting with `=` defused, the JSON document parsing as one object whose `entryCount` matches what was written, and redaction asserted from both directions - the original names appear nowhere, while the row count, the sizes, the depth and the repeated-name identity are unchanged, a file keeps its extension and a directory does not. The error list's wording: a message that only repeats its path is suppressed, a Win32 code with no message still prints, and the bytes behind a refused path are null when no tree is loaded rather than zero. The config template parsed back into `AppConfig` and compared with the defaults value by value, so a typo in the document the tool writes cannot reach a user; and `--no-color` leaving the argument list exactly as the verb expects it.
+
 *P5:* the terminal layer — 15 tests: CJK, emoji and combining-mark widths, `Fit` landing on exactly N columns, sanitisation, frame row diffing (an identical frame writes nothing, a changed row writes only itself), the erase-before-write order, colour suppression, sparkline scaling. The Tree screen — 14 tests that press keys and read the frame: row order, descending and returning to the same row, the size mode on a hard-link alias, the filter, search jumping into the match's directory, marks, refusing `.exe`, details, alignment under `U+202E` and CJK, a 200k-entry directory drawing exactly one page, `g`/`G`, narrowing to 80 columns. Frames are asserted as uncoloured text: assertions about escape sequences would test the colour scheme, not the behaviour.
 
 ### 22.2. What is integration-tested against a real filesystem
@@ -1876,6 +1965,8 @@ It checks traversal, sizes, dedup, errors, and above all **that deletion never l
 
 *P9:* the rebuild against the real thing, which is the test that decides whether the feature is trustworthy — the claim an incremental scan makes is not "it is fast" but "it says what a full scan would say". A real tree is scanned in full, changed (a file added, one deleted, one grown, and a 7 MB subtree moved in from outside), then rebuilt from the directories a journal record would have named, and the two trees are compared path by path, byte by byte and file by file. Plus: an untouched directory keeping the size the full scan gave it, an empty directory that filled up, the allocated size of a re-read file matching a full scan's for a one-byte file as well as a large one — not "logical rounded up to a cluster", because a one-byte file's data lives inside its own MFT record and occupies no clusters at all — and the contiguous-children invariant holding across a rebuild. None of it needs administrator rights, which is the point: the journal read is the only part that does.
 
+*P10:* not a test file but a measurement, and it belongs here because it is the only way the claims of §5.5 and §20 can be checked: a real 27 MB snapshot of this machine's C: (1,583,976 nodes) opened before and after the change, in the same process, with the working set read from the OS rather than from the GC. And three things driven through a real console, because that is where they live: the TUI opened on the same snapshot with its peak working set sampled from outside (134.9 MB), one Ctrl+C into a running scan (a `cancelled` row and a partial snapshot), and a whole-disk export whose 1.58M rows were then counted by flag - which is how §21's reparse, self and size-mode criteria stopped being assertions about the code and became counts from a disk. The keystroke scripts refuse to type anything unless the console they started is the foreground window; a stray Ctrl+C in somebody else's terminal is not an acceptable cost of a measurement.
+
 *P8:* the whole funnel against real files — three copies of one file becoming one group that gives back two; two files of one size that differ; a size nothing shares never being opened at all; a hard-link set through `CreateHardLink`, apart from the duplicates and freeing nothing; a real copy beside a hard-link set still being a duplicate; the byte-for-byte stage splitting a group a hash had agreed about, including the counter that says it happened; the re-check refusing the whole operation after one copy is edited, and refusing a name out of a hard-link set; the hash cache answering a second run without reading the files, and the same groups coming out of it; a run stored and read back with its totals, and a second run replacing the first; and `sha256` finding what `xxh128` finds. Cloud placeholders are tested through a snapshot that claims them, because a real one needs a cloud provider and would be a test of OneDrive.
 
 ### 22.3. Race test for T2
@@ -1891,6 +1982,8 @@ A script compares a WizTree CSV export over the 50 largest directories, toleranc
 ### 22.5. What is not tested automatically
 
 Actually invoking `vssadmin delete shadows`, `DISM /StartComponentCleanup` or `powercfg /h off` — by hand, on a VM with a snapshot. Such tests have no place in CI.
+
+*P10:* three more, each for the same reason — the machine, not the code, is what is missing. **The native link**, because NativeAOT needs a C++ toolchain the build machine does not have (§19.4.1); the compilation is checked, the executable does not exist. **A cloud-only file**, because there is no OneDrive placeholder on this disk: the flag is asserted over synthetic trees and has never been seen set by a real scan. **Reading the change journal**, still, from P9. All three are stated where they matter rather than left to be discovered: in the status table, in §20, and as unticked boxes in §21.
 
 ---
 

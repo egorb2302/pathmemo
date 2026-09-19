@@ -105,12 +105,8 @@ internal static class ScanCommand
             snapshotId is null ? null : SnapshotBytes(scanId),
             aggregates));
 
-        if (Environment.GetEnvironmentVariable("PATHMEMO_DIAG") == "1")
-        {
-            Console.Error.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "  diag: category and extension totals over {0:N0} nodes in {1:F0} ms",
-                result.TotalNodes, aggregateTime.TotalMilliseconds));
-        }
+        Diagnostics.Note("category and extension totals over {0:N0} nodes in {1:F0} ms",
+            result.TotalNodes, aggregateTime.TotalMilliseconds);
 
         Emit(result, options, snapshotId, aggregates);
 
@@ -470,19 +466,7 @@ internal static class ScanCommand
         PrintCategories(w, aggregates, result.AllocatedBytes);
         PrintLimitations(w, result);
 
-        if (Environment.GetEnvironmentVariable("PATHMEMO_DIAG") == "1")
-        {
-            var process = System.Diagnostics.Process.GetCurrentProcess();
-            w.WriteLine();
-            w.WriteLine("Diagnostics");
-            w.WriteLine($"  live managed      {SizeFormat.Bytes(GC.GetTotalMemory(forceFullCollection: true))}");
-            w.WriteLine($"  managed heap peak {SizeFormat.Bytes((long)GC.GetGCMemoryInfo().TotalCommittedBytes)}");
-            w.WriteLine($"  private bytes     {SizeFormat.Bytes(process.PrivateMemorySize64)}");
-            w.WriteLine($"  working set       {SizeFormat.Bytes(process.WorkingSet64)}");
-            w.WriteLine($"  peak working set  {SizeFormat.Bytes(process.PeakWorkingSet64)}");
-            w.WriteLine($"  gen0/1/2 GCs      {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)}");
-            w.WriteLine($"  bytes per node    {(result.TotalNodes > 0 ? GC.GetTotalMemory(false) / result.TotalNodes : 0)}");
-        }
+        Diagnostics.Memory(w, $"after a {ScannerName(result.Scanner)} scan", result.TotalNodes);
 
         if (snapshotId is { } id)
         {

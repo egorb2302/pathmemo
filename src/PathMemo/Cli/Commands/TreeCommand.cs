@@ -149,7 +149,19 @@ internal sealed record TreeOptions
 
 internal static class SnapshotLoader
 {
-    internal static bool TryLoad(long? requested, out SnapshotContents snapshot, out long id)
+    internal static bool TryLoad(long? requested, out SnapshotContents snapshot, out long id) =>
+        TryLoad(requested, SnapshotParts.All, out snapshot, out id);
+
+    /// <summary>
+    /// Opens a scan's snapshot, or explains which one is missing.
+    /// </summary>
+    /// <param name="parts">
+    /// What the command will actually read. A summary needs the tree; <c>errors</c> needs a
+    /// few hundred strings, and inflating a 74 MB tree to print them is 200 ms and 100 MB
+    /// spent on nothing (README sections 5.2, 20).
+    /// </param>
+    internal static bool TryLoad(long? requested, SnapshotParts parts,
+                                 out SnapshotContents snapshot, out long id)
     {
         snapshot = null!;
         id = 0;
@@ -168,8 +180,15 @@ internal static class SnapshotLoader
 
         try
         {
-            snapshot = SnapshotFile.Read(entry.Path);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            snapshot = SnapshotFile.Read(entry.Path, parts);
+            clock.Stop();
+
             id = entry.Id;
+
+            Diagnostics.Note("opened scan {0} ({1:N0} nodes) in {2:F0} ms",
+                entry.Id, snapshot.Tree.Count, clock.Elapsed.TotalMilliseconds);
+            Diagnostics.Memory(Console.Error, "with a snapshot open", snapshot.Tree.Count);
             return true;
         }
         catch (InvalidDataException ex)

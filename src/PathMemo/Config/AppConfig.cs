@@ -70,6 +70,17 @@ internal sealed record DuplicatesSettings
     internal int HashCacheMaxEntries { get; init; } = 200_000;
 }
 
+/// <summary>What <c>export</c> does by default (README section 13, threat T13).</summary>
+internal sealed record ExportSettings
+{
+    /// <summary>
+    /// Hash the names in every export unless told otherwise. Off by default, because an
+    /// export is normally read by the person who made it; on, it is a document that can be
+    /// attached to a bug report without handing over the names of everything on the disk.
+    /// </summary>
+    internal bool RedactPaths { get; init; }
+}
+
 /// <summary>
 /// Which cleanup rules are in force, and the user's own (README section 7.4).
 /// </summary>
@@ -108,6 +119,7 @@ internal sealed class AppConfig
     internal DeleteSettings Delete { get; private init; } = new();
     internal RulesSettings Rules { get; private init; } = new();
     internal DuplicatesSettings Duplicates { get; private init; } = new();
+    internal ExportSettings Export { get; private init; } = new();
 
     /// <summary>Problems found while loading, printed once by the command that needs them.</summary>
     internal IReadOnlyList<string> Warnings { get; private init; } = [];
@@ -161,6 +173,7 @@ internal sealed class AppConfig
                 Delete = ReadDelete(document.RootElement, warnings),
                 Rules = ReadRules(document.RootElement, warnings),
                 Duplicates = ReadDuplicates(document.RootElement, warnings),
+                Export = ReadExport(document.RootElement, warnings),
                 Warnings = warnings,
                 Loaded = true,
             };
@@ -181,6 +194,18 @@ internal sealed class AppConfig
         return new ScanSettings
         {
             UseUsnIncremental = Boolean(scan, "useUsnIncremental", defaults.UseUsnIncremental, warnings),
+        };
+    }
+
+    private static ExportSettings ReadExport(JsonElement root, List<string> warnings)
+    {
+        var defaults = new ExportSettings();
+        if (!root.TryGetProperty("export", out var export) || export.ValueKind != JsonValueKind.Object)
+            return defaults;
+
+        return new ExportSettings
+        {
+            RedactPaths = Boolean(export, "redactPaths", defaults.RedactPaths, warnings),
         };
     }
 

@@ -1,6 +1,7 @@
 using PathMemo.Cli;
 using PathMemo.Cli.Commands;
 using PathMemo.Cli.Interactive;
+using PathMemo.Cli.Output;
 using PathMemo.Config;
 using PathMemo.Tui.Dialogs;
 using PathMemo.Tui.Screens;
@@ -57,6 +58,12 @@ internal static class TuiHost
         {
             Active = false;
             VirtualTerminal.Restore();
+
+            // After the screen is given back, never during: a diagnostic line in the
+            // middle of a frame is what README section 14.6 forbids. This is the number
+            // behind the "RSS in the TUI with a snapshot open" row of section 20, and it
+            // has to be measurable with the shipped exe rather than a profiler.
+            Diagnostics.Memory(Console.Error, "the TUI at exit");
         }
     }
 
@@ -68,8 +75,7 @@ internal static class TuiHost
         var reclaim = new ReclaimScreen();
         var dupes = new DupesScreen();
 
-        var color = Environment.GetEnvironmentVariable("NO_COLOR") is null;
-        var screen = new Screen(Console.Out, color);
+        var screen = new Screen(Console.Out, Colors.Enabled);
 
         VirtualTerminal.EnterAlternateBuffer();
         Fit(screen);
@@ -225,16 +231,24 @@ internal static class TuiHost
 
     private static void OpenConfig(TuiSession session)
     {
-        if (!File.Exists(AppPaths.ConfigPath))
+        // P10: the same door as `pathmemo config --edit`. Telling the user to go and create
+        // a file by hand, when the tool knows what a good one looks like, was never an answer.
+        var existed = File.Exists(AppPaths.ConfigPath);
+        if (!ConfigCommand.EnsureFile(out var reason))
         {
-            session.Warn($"no config file yet - create {AppPaths.ConfigPath} to set 'protect' and 'delete' (README section 12)");
+            session.Warn($"could not create the config: {reason}");
             return;
         }
 
-        if (Platform.FileLaunch.TryOpen(AppPaths.ConfigPath, out var error))
-            session.Say("opened the config in its default editor - press F5 after saving");
-        else
+        if (!Platform.FileLaunch.TryOpen(AppPaths.ConfigPath, out var error))
+        {
             session.Warn($"could not open the config: {error}");
+            return;
+        }
+
+        session.Say(existed
+            ? "opened the config in its default editor - press F5 after saving"
+            : "wrote a default config and opened it - press F5 after saving");
     }
 
     /// <summary>

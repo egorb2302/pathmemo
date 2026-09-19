@@ -19,12 +19,12 @@ internal static class Program
 
         ConfigureConsole();
 
-        // --data-dir is global, so it is taken out of the argument list before the verb
-        // sees it. Ignored while elevated, where an arbitrary store path would be a
-        // write primitive running as administrator (README section 12.1).
+        // --data-dir and --no-color are global, so they are taken out of the argument list
+        // before the verb sees it. --data-dir is ignored while elevated, where an arbitrary
+        // store path would be a write primitive running as administrator (README 12.1).
         try
         {
-            args = TakeDataDirectory(args);
+            args = TakeGlobalOptions(args);
         }
         catch (ArgumentException ex)
         {
@@ -69,6 +69,9 @@ internal static class Program
                 "ops" => ParseOps(rest),
                 "history" => HistoryCommand.Run(ParseHistory(rest)),
                 "diff" => DiffCommand.Run(ParseDiff(rest)),
+                "errors" => ErrorsCommand.Run(ParseErrors(rest)),
+                "export" => ExportCommand.Run(ParseExport(rest)),
+                "config" => ConfigCommand.Run(ParseConfig(rest)),
                 "schedule" => ScheduleCommand.Run(ParseSchedule(rest), cancellation.Token),
                 "doctor" => DoctorCommand.Run(),
                 "status" => StatusCommand.Run(),
@@ -173,23 +176,31 @@ internal static class Program
     }
 
     /// <summary>
-    /// Removes <c>--data-dir &lt;path&gt;</c> from the arguments and applies it, so every
-    /// command shares one store location without parsing the option itself.
+    /// Applies the options that belong to no command in particular and removes them from the
+    /// arguments, so every verb shares one store location and one answer about colour without
+    /// parsing either option itself (README section 13.1).
     /// </summary>
-    private static string[] TakeDataDirectory(string[] args)
+    internal static string[] TakeGlobalOptions(string[] args)
     {
         var kept = new List<string>(args.Length);
 
         for (var i = 0; i < args.Length; i++)
         {
-            if (args[i] != "--data-dir")
+            switch (args[i])
             {
-                kept.Add(args[i]);
-                continue;
-            }
+                case "--data-dir":
+                    if (i + 1 >= args.Length) throw new ArgumentException("'--data-dir' needs a path");
+                    Config.AppPaths.Redirect(args[++i]);
+                    break;
 
-            if (i + 1 >= args.Length) throw new ArgumentException("'--data-dir' needs a path");
-            Config.AppPaths.Redirect(args[++i]);
+                case "--no-color" or "--no-colour":
+                    Cli.Output.Colors.Disable();
+                    break;
+
+                default:
+                    kept.Add(args[i]);
+                    break;
+            }
         }
 
         return [.. kept];
@@ -316,6 +327,81 @@ internal static class Program
             1 => options with { BeforeId = ids[0] },
             _ => options,
         };
+    }
+
+    private static ErrorsOptions ParseErrors(string[] args)
+    {
+        var options = new ErrorsOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--limit": options = options with { Limit = ArgParse.Count(ArgParse.Value(args, ref i)) }; break;
+                case "--kind": options = options with { Kind = ParseErrorKind(ArgParse.Value(args, ref i)) }; break;
+                case "--sizes": options = options with { Sizes = true }; break;
+                case "--json": options = options with { Json = true }; break;
+                case "--scan": options = options with { ScanId = ArgParse.Id(ArgParse.Value(args, ref i)) }; break;
+                default: options = options with { ScanId = ArgParse.Id(Positional(args[i])) }; break;
+            }
+        }
+
+        return options;
+    }
+
+    private static Scanning.ScanErrorKind ParseErrorKind(string value)
+    {
+        foreach (var kind in Enum.GetValues<Scanning.ScanErrorKind>())
+            if (kind.ToString().Equals(value, StringComparison.OrdinalIgnoreCase))
+                return kind;
+
+        throw new ArgumentException($"--kind must be one of {string.Join(", ", Enum.GetNames<Scanning.ScanErrorKind>())}");
+    }
+
+    private static ExportOptions ParseExport(string[] args)
+    {
+        var options = new ExportOptions();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--format": options = options with { Format = ParseFormat(ArgParse.Value(args, ref i)) }; break;
+                case "--output" or "-o": options = options with { Output = ArgParse.Value(args, ref i) }; break;
+                case "--redact": options = options with { Redact = true }; break;
+                case "--no-redact": options = options with { Redact = false }; break;
+                case "--yes" or "-y": options = options with { Yes = true }; break;
+                case "--json": options = options with { Format = Cli.Output.ScanFormat.Json }; break;
+                case "--csv": options = options with { Format = Cli.Output.ScanFormat.Csv }; break;
+                case "--scan": options = options with { ScanId = ArgParse.Id(ArgParse.Value(args, ref i)) }; break;
+                default: options = options with { ScanId = ArgParse.Id(Positional(args[i])) }; break;
+            }
+        }
+
+        // 'console' is the reading summary of a scan, which is not what a file export is for.
+        if (options.Format == Cli.Output.ScanFormat.Console)
+            throw new ArgumentException("export --format must be json or csv");
+
+        return options;
+    }
+
+    private static ConfigAction ParseConfig(string[] args)
+    {
+        var action = ConfigAction.Show;
+
+        foreach (var argument in args)
+        {
+            action = argument switch
+            {
+                "--path" => ConfigAction.Path,
+                "--edit" => ConfigAction.Edit,
+                "--reset" => ConfigAction.Reset,
+                "--show" => ConfigAction.Show,
+                _ => throw new ArgumentException($"unknown option '{argument}' - config takes --path, --edit or --reset"),
+            };
+        }
+
+        return action;
     }
 
     private static TreeOptions ParseTree(string[] args)
@@ -583,6 +669,9 @@ internal static class Program
               ops [<op-id>]       the deletion journal
               history [options]   list stored scans
               diff [<a> <b>]      what changed between two scans (default: the last two)
+              errors [<scan-id>]  the paths a scan could not read
+              export [<scan-id>]  the whole tree of one scan, as JSON or CSV
+              config [options]    where config.json is, and what it is setting
               schedule [options]  run a scan on a timer, so the history has data
               doctor              report what pathmemo can do on this machine
               help                show this help
@@ -591,6 +680,7 @@ internal static class Program
             GLOBAL
               --data-dir <path>   where to keep snapshots and the database
                                   (ignored while running as administrator)
+              --no-color          no ANSI colour (NO_COLOR in the environment does the same)
 
             scan
               --top <n>           how many largest entries to list (default 15)
@@ -712,6 +802,31 @@ internal static class Program
               <op-id>             the items of one operation
               --limit <n>         rows to show (default 20)
 
+            errors
+              <scan-id>           which scan (default: newest);  --scan <id> does the same
+              --kind <kind>       list one kind only: accessDenied, sharingViolation, ...
+              --limit <n>         paths shown per kind (default 20)
+              --sizes             also open the tree, to total the bytes behind them
+              --json              machine-readable
+              Reads the error list alone, so it answers in under a millisecond.
+
+            export
+              <scan-id>           which scan (default: newest)
+              --format <kind>     json (default) | csv;  --json and --csv say the same
+              --output <file>, -o  where to write it (default: the store's exports folder)
+              --redact            hash every name, keeping structure, sizes and extensions
+              --yes, -y           overwrite an existing file
+              One row per node - a million lines for a whole disk - so it always goes to
+              a file rather than to a terminal.
+
+            config
+              --path              print the path to config.json and nothing else
+                                  (exit 7 when there is no file there yet)
+              --edit              create it from a documented template if needed, and open it
+              --reset             keep the old file as config.json.bak and write the template
+              With no option: where the file is, whether it is being obeyed, and the
+              values in force. Editing is refused while elevated (README section 12.1).
+
             schedule
               --weekly            every week (the default when a schedule is asked for)
               --daily             every day
@@ -723,8 +838,7 @@ internal static class Program
               idle and on AC power. Register it from an administrator prompt and the
               scheduled scan can use the MFT and the change journal.
 
-            Not implemented yet (see README.md for the full command set):
-              errors, export, config
+            Every command in README.md section 13 is implemented.
             """);
         return ExitCode.Ok;
     }

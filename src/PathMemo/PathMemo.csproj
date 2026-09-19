@@ -29,6 +29,16 @@
     <!-- Trimming stays viable because there is no reflection-heavy dependency
          (README section 18): no Dapper, no DbUp, no Terminal.Gui. -->
     <IsTrimmable>true</IsTrimmable>
+
+    <!-- P10: the three analysers that decide whether NativeAOT is reachable, on during an
+         ordinary build rather than only at publish time. With TreatWarningsAsErrors they
+         turn "works until it doesn't" into a compile error: reflection over a trimmed type,
+         a dynamic code path, or an assembly location that a single file does not have.
+         Keeping them on is the only way the AOT road stays open while the code grows
+         (README section 19.4). -->
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
   </PropertyGroup>
 
   <ItemGroup>

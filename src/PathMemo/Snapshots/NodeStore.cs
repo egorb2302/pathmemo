@@ -20,6 +20,18 @@ internal sealed class NodeStore
 {
     internal const int NoNode = -1;
 
+    /// <summary>
+    /// A tree with no nodes: what a snapshot read without <see cref="SnapshotParts.Tree"/>
+    /// carries, so that every field of <see cref="SnapshotContents"/> stays non-null.
+    /// </summary>
+    internal static readonly NodeStore Empty = new()
+    {
+        Parent = [], NameOffset = [], FirstChild = [], ChildCount = [],
+        Allocated = [], Logical = [], FileCount = [], Mtime = [],
+        Attributes = [], Flags = [], LinkCount = [], VolumeIndex = [],
+        NameBlob = [], Roots = [],
+    };
+
     internal required int[] Parent { get; init; }
     internal required int[] NameOffset { get; init; }
     internal required int[] FirstChild { get; init; }

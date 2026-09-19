@@ -23,6 +23,31 @@ internal enum SectionKind : uint
 }
 
 /// <summary>
+/// Which parts of a snapshot a reader actually needs (README sections 5.2, 20).
+/// </summary>
+/// <remarks>
+/// Sections are compressed and indexed independently precisely so that a command can skip
+/// the ones it will not look at: <c>errors</c> wants a few hundred strings out of a file
+/// whose tree is 74 MB, and inflating that tree to print them costs a quarter of a second
+/// and a hundred megabytes for nothing.
+/// </remarks>
+[Flags]
+internal enum SnapshotParts
+{
+    /// <summary>The header alone: scanner, flags, times, node count.</summary>
+    Meta = 0,
+
+    /// <summary>The file tree - NODES, NAMES and ROOTS, which are one thing in practice.</summary>
+    Tree = 1 << 0,
+
+    Volumes = 1 << 1,
+    Errors = 1 << 2,
+    Usn = 1 << 3,
+
+    All = Tree | Volumes | Errors | Usn,
+}
+
+/// <summary>
 /// Reads and writes <c>.pmsnap</c>: one scan's complete file tree.
 /// </summary>
 /// <remarks>
@@ -126,7 +151,17 @@ internal static class SnapshotFile
         }
     }
 
-    internal static SnapshotContents Read(string path)
+    /// <summary>
+    /// Opens a snapshot, decompressing only the sections <paramref name="parts"/> asks for.
+    /// </summary>
+    /// <remarks>
+    /// Every section is inflated <em>straight into its destination</em> - the node arrays,
+    /// the name blob - rather than into a byte[] that is then copied. Materialising the
+    /// packed form first doubled the peak: a 1.58M-node tree is 68 MB of arrays plus a
+    /// 68 MB buffer plus the compressed bytes, which is how an open snapshot came to hold
+    /// 200 MB against a 150 MB budget (README section 20).
+    /// </remarks>
+    internal static SnapshotContents Read(string path, SnapshotParts parts = SnapshotParts.All)
     {
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
 
@@ -151,43 +186,81 @@ internal static class SnapshotFile
         var table = new byte[sectionCount * SectionEntryBytes];
         file.ReadExactly(table);
 
-        var payloads = new Dictionary<SectionKind, byte[]>(sectionCount);
+        var sections = new Dictionary<SectionKind, Section>(sectionCount);
         for (var i = 0; i < sectionCount; i++)
         {
             var at = i * SectionEntryBytes;
-            var kind = (SectionKind)BinaryPrimitives.ReadUInt32LittleEndian(table.AsSpan(at));
-            var compression = BinaryPrimitives.ReadUInt32LittleEndian(table.AsSpan(at + 4));
-            var rawLength = (int)BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(at + 8));
-            var storedLength = (int)BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(at + 16));
-            var offset = BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(at + 24));
-
-            file.Position = offset;
-            var bytes = new byte[storedLength];
-            file.ReadExactly(bytes);
-
-            payloads[kind] = compression == CompressionDeflate ? Inflate(bytes, rawLength) : bytes;
+            sections[(SectionKind)BinaryPrimitives.ReadUInt32LittleEndian(table.AsSpan(at))] = new Section(
+                Compression: BinaryPrimitives.ReadUInt32LittleEndian(table.AsSpan(at + 4)),
+                RawLength: (int)BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(at + 8)),
+                Offset: BinaryPrimitives.ReadInt64LittleEndian(table.AsSpan(at + 24)));
         }
 
-        var names = payloads[SectionKind.Names];
-        var roots = MemoryMarshal.Cast<byte, int>(payloads[SectionKind.Roots]).ToArray();
-        var tree = UnpackNodes(payloads[SectionKind.Nodes], nodeCount, names, roots);
+        var tree = NodeStore.Empty;
+        if ((parts & SnapshotParts.Tree) != 0)
+        {
+            var names = Payload(file, sections[SectionKind.Names]);
+            var roots = MemoryMarshal.Cast<byte, int>(Payload(file, sections[SectionKind.Roots])).ToArray();
+            tree = Inflating(file, sections[SectionKind.Nodes],
+                stream => UnpackNodes(stream, nodeCount, names, roots));
+        }
 
         return new SnapshotContents
         {
+            Parts = parts,
             Tree = tree,
-            Volumes = UnpackVolumes(payloads[SectionKind.Volumes]),
-            Errors = UnpackErrors(payloads[SectionKind.Errors]),
+            Volumes = (parts & SnapshotParts.Volumes) != 0
+                ? UnpackVolumes(Payload(file, sections[SectionKind.Volumes])) : [],
+            Errors = (parts & SnapshotParts.Errors) != 0
+                ? UnpackErrors(Payload(file, sections[SectionKind.Errors])) : [],
 
             // Looked up rather than indexed: every section added after v1 has to be
             // optional, or opening yesterday's snapshot would throw instead of simply
             // meaning "no incremental rescan from this one" (README section 5.2).
-            Usn = payloads.TryGetValue(SectionKind.Usn, out var usn) ? UnpackUsn(usn) : [],
+            Usn = (parts & SnapshotParts.Usn) != 0 && sections.TryGetValue(SectionKind.Usn, out var usn)
+                ? UnpackUsn(Payload(file, usn)) : [],
             Scanner = scanner,
             Flags = flags,
             StartedUtc = startedUtc,
             Duration = duration,
         };
     }
+
+    /// <summary>
+    /// One section's entry in the index: where it is and how it is stored.
+    /// </summary>
+    /// <remarks>
+    /// The stored (compressed) length is in the file but not here: the reader either inflates
+    /// until it has <c>RawLength</c> bytes or reads exactly that many, so it never needs to
+    /// know how much of the file that took. A field read and ignored would only invite a
+    /// check that does not exist.
+    /// </remarks>
+    private readonly record struct Section(uint Compression, int RawLength, long Offset);
+
+    /// <summary>
+    /// Runs <paramref name="read"/> over the section's decompressed bytes as a stream.
+    /// </summary>
+    /// <remarks>
+    /// The deflate stream reads through the file directly and may buffer past the end of
+    /// its own data, which is harmless: every section seeks before it reads, and nothing
+    /// reads two of them at once.
+    /// </remarks>
+    private static T Inflating<T>(FileStream file, Section section, Func<Stream, T> read)
+    {
+        file.Position = section.Offset;
+        if (section.Compression != CompressionDeflate) return read(file);
+
+        using var deflate = new DeflateStream(file, CompressionMode.Decompress, leaveOpen: true);
+        return read(deflate);
+    }
+
+    private static byte[] Payload(FileStream file, Section section) =>
+        Inflating(file, section, stream =>
+        {
+            var raw = new byte[section.RawLength];
+            stream.ReadExactly(raw);
+            return raw;
+        });
 
     // Arrays are written back to back in a fixed order. Every one is blittable, so this is
     // a memcpy per array rather than a per-element loop.
@@ -221,21 +294,26 @@ internal static class SnapshotFile
         return buffer;
     }
 
-    private static NodeStore UnpackNodes(byte[] packed, int n, byte[] names, int[] roots)
+    /// <summary>
+    /// Reads the node arrays straight out of the section's stream, in the order
+    /// <see cref="PackNodes"/> wrote them.
+    /// </summary>
+    /// <remarks>
+    /// Object initialisers are evaluated in source order, which is what makes the
+    /// positional reads below correct - the same thing <see cref="PackNodes"/> relies on.
+    /// </remarks>
+    private static NodeStore UnpackNodes(Stream packed, int n, byte[] names, int[] roots)
     {
-        var at = 0;
-
         T[] Take<T>() where T : unmanaged
         {
             var array = new T[n];
 
             // AsSpan() first, deliberately. AsBytes has a Span and a ReadOnlySpan overload,
             // and an array argument picks the writable one only up to C# 13; C# 14's
-            // first-class span conversions make it choose ReadOnlySpan, and the copy below
+            // first-class span conversions make it choose ReadOnlySpan, and the read below
             // stops compiling. Naming the span keeps this building on any toolchain.
             var bytes = MemoryMarshal.AsBytes(array.AsSpan());
-            packed.AsSpan(at, bytes.Length).CopyTo(bytes);
-            at += bytes.Length;
+            packed.ReadExactly(bytes);
             return array;
         }
 
@@ -382,18 +460,17 @@ internal static class SnapshotFile
         return output.ToArray();
     }
 
-    private static byte[] Inflate(byte[] stored, int rawLength)
-    {
-        var raw = new byte[rawLength];
-        using var input = new MemoryStream(stored);
-        using var deflate = new DeflateStream(input, CompressionMode.Decompress);
-        deflate.ReadExactly(raw);
-        return raw;
-    }
 }
 
 internal sealed record SnapshotContents
 {
+    /// <summary>
+    /// What was actually loaded. A part that was not asked for is empty rather than
+    /// absent, so a caller that reads it gets nothing instead of an exception - and this
+    /// says which of the two happened.
+    /// </summary>
+    internal SnapshotParts Parts { get; init; } = SnapshotParts.All;
+
     internal required NodeStore Tree { get; init; }
     internal required IReadOnlyList<VolumeInfo> Volumes { get; init; }
     internal required IReadOnlyList<ScanError> Errors { get; init; }

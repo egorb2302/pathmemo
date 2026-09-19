@@ -43,13 +43,9 @@ internal static class DiffCommand
         var diff = SnapshotDiff.Compare(beforeId, before, afterId, after, options.SizeMode,
             options.MinBytes > 0 ? options.MinBytes : SnapshotDiff.MinimumInteresting);
 
-        if (Environment.GetEnvironmentVariable("PATHMEMO_DIAG") == "1")
-        {
-            Console.Error.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "  diag: loaded two snapshots ({0:N0} + {1:N0} nodes) in {2:F0} ms, compared in {3:F0} ms",
-                before.Tree.Count, after.Tree.Count,
-                loaded.TotalMilliseconds, (clock.Elapsed - loaded).TotalMilliseconds));
-        }
+        Diagnostics.Note("loaded two snapshots ({0:N0} + {1:N0} nodes) in {2:F0} ms, compared in {3:F0} ms",
+            before.Tree.Count, after.Tree.Count,
+            loaded.TotalMilliseconds, (clock.Elapsed - loaded).TotalMilliseconds);
 
         if (options.Json)
         {
