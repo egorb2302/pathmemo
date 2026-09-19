@@ -23,7 +23,7 @@ public sealed class StorageTests : IDisposable
     public StorageTests()
     {
         Directory.CreateDirectory(_dataDirectory);
-        AppPaths.Redirect(_dataDirectory);
+        TestStore.Use(_dataDirectory);
     }
 
     public void Dispose()

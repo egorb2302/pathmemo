@@ -2,6 +2,7 @@ using System.Text.Json;
 using PathMemo.Cli.Commands;
 using PathMemo.Cli.Output;
 using PathMemo.Config;
+using PathMemo.Platform;
 using PathMemo.Scanning;
 using PathMemo.Snapshots;
 using Xunit;
@@ -347,6 +348,52 @@ public sealed class PolishTests : IDisposable
             "\"redactPaths\": false", "\"redactPaths\": true", StringComparison.Ordinal));
 
         Assert.True(AppConfig.Load(path).Export.RedactPaths);
+    }
+
+    /// <summary>
+    /// Section 12.1: while elevated, <c>--data-dir</c> is ignored rather than obeyed.
+    /// </summary>
+    /// <remarks>
+    /// This rule had no test, because the suite could only ever observe it by being run as
+    /// an administrator - and when it was, the redirect stopped working underneath every
+    /// storage test and they wrote into the real store instead of a temporary one. Asserting
+    /// it here, with the answer stated rather than inherited, is what makes the rule visible
+    /// without needing an elevated test run. The refusal is the whole of threat T7: an
+    /// administrator process that writes wherever its command line points is a
+    /// privilege-escalation gadget.
+    /// </remarks>
+    [Fact]
+    public void Elevated_the_data_directory_cannot_be_moved_by_a_command_line()
+    {
+        var before = AppPaths.DataDirectory;
+        var elsewhere = Path.Combine(Path.GetTempPath(), "pathmemo-should-not-move-" + Guid.NewGuid().ToString("N")[..8]);
+
+        Elevation.Assume(true);
+        try
+        {
+            AppPaths.Redirect(elsewhere);
+            Assert.Equal(before, AppPaths.DataDirectory);
+        }
+        finally
+        {
+            // Restored for the rest of the suite, which is only safe because the tests run
+            // sequentially - see TestParallelism.cs.
+            Elevation.Assume(false);
+        }
+
+        // And unelevated the same call is obeyed, or the assertion above would pass for the
+        // wrong reason: a Redirect that never works at all.
+        Directory.CreateDirectory(elsewhere);
+        try
+        {
+            AppPaths.Redirect(elsewhere);
+            Assert.Equal(Path.GetFullPath(elsewhere), Path.GetFullPath(AppPaths.DataDirectory));
+        }
+        finally
+        {
+            AppPaths.Redirect(before);
+            Directory.Delete(elsewhere, recursive: true);
+        }
     }
 
     // ---- README section 13.1: the global options --------------------------------------

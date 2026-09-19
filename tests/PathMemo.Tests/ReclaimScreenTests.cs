@@ -27,7 +27,7 @@ public sealed class ReclaimScreenTests : IDisposable
     public ReclaimScreenTests()
     {
         Directory.CreateDirectory(_dataDirectory);
-        AppPaths.Redirect(_dataDirectory);
+        TestStore.Use(_dataDirectory);
         AppConfig.Reset();
     }
 

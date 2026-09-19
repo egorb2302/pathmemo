@@ -35,7 +35,7 @@ public sealed class DeletionTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(_dataDirectory);
-        AppPaths.Redirect(_dataDirectory);
+        TestStore.Use(_dataDirectory);
         AppConfig.Reset();
     }
 

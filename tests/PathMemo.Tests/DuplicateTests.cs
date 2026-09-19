@@ -35,8 +35,7 @@ public sealed partial class DuplicateTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(_dataDirectory);
-        AppPaths.Redirect(_dataDirectory);
-        AppConfig.Reset();
+        TestStore.Use(_dataDirectory);
     }
 
     public void Dispose()
