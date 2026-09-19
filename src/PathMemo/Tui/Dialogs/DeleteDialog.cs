@@ -2,6 +2,7 @@ using PathMemo.Analysis;
 using PathMemo.Cli.Commands;
 using PathMemo.Cli.Output;
 using PathMemo.Deletion;
+using PathMemo.Text;
 using PathMemo.Tui.Terminal;
 
 namespace PathMemo.Tui.Dialogs;

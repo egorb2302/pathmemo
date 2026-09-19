@@ -1,3 +1,4 @@
+using PathMemo.Text;
 using PathMemo.Tui.Terminal;
 using Xunit;
 

@@ -13,7 +13,15 @@ namespace PathMemo.Cli.Commands;
 
 internal static class ScanCommand
 {
-    internal static async Task<int> RunAsync(ScanOptions options, CancellationToken ct)
+    /// <param name="progress">
+    /// Where progress goes instead of the console. The GUI passes its own sink so that one
+    /// scan path serves both faces of the application: the elevation offer, the reserved id,
+    /// the snapshot, the history row and the failure bookkeeping are the same code whether the
+    /// scan was typed or clicked (README section 24.4). A second orchestration would be a
+    /// second set of rules about what happens when the database is locked.
+    /// </param>
+    internal static async Task<int> RunAsync(
+        ScanOptions options, CancellationToken ct, IProgress<ScanProgress>? progress = null)
     {
         var volumes = ResolveVolumes(options.Roots);
         if (volumes.Count == 0)
@@ -64,12 +72,14 @@ internal static class ScanCommand
 
         var scanId = reserved ?? SnapshotStore.MaxId() + 1;
 
-        var reporter = options.Quiet || options.Format != ScanFormat.Console ? null : new ProgressPrinter();
+        var reporter = progress is not null || options.Quiet || options.Format != ScanFormat.Console
+            ? null
+            : new ProgressPrinter();
 
         ScanResult result;
         try
         {
-            result = await ScanAllAsync(request, volumes, reporter, ct);
+            result = await ScanAllAsync(request, volumes, progress ?? reporter, ct);
         }
         catch (Exception ex)
         {

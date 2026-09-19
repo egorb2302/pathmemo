@@ -19,7 +19,21 @@ namespace PathMemo.Tui.Terminal;
 /// </remarks>
 internal static class Glyphs
 {
-    internal static bool Ascii { get; set; }
+    private static bool _ascii;
+
+    /// <summary>
+    /// Whether the console font can only draw ASCII. Setting it also hands the control-character
+    /// stand-in to <see cref="Text.Sanitizer"/>, which has no business knowing about consoles.
+    /// </summary>
+    internal static bool Ascii
+    {
+        get => _ascii;
+        set
+        {
+            _ascii = value;
+            Text.Sanitizer.Replacement = ControlChar;
+        }
+    }
 
     internal static char BarFilled => Ascii ? '#' : '█';       // FULL BLOCK
     internal static char BarEmpty => Ascii ? '.' : '░';        // LIGHT SHADE

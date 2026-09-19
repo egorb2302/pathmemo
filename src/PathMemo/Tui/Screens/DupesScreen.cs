@@ -6,6 +6,7 @@ using PathMemo.Deletion;
 using PathMemo.Duplicates;
 using PathMemo.Storage;
 using PathMemo.Tui.Dialogs;
+using PathMemo.Text;
 using PathMemo.Tui.Terminal;
 
 namespace PathMemo.Tui.Screens;

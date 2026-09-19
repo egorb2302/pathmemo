@@ -1,6 +1,7 @@
 # pathmemo
 
 **Disk space screener for Windows.** One `.exe`, no installer. Finds where the space went, and frees it safely.
+Double-click it for a window; type it for a command line. The same one file does both.
 
 **Spec version:** 3.0
 **Target:** Windows 10 1809+ / Windows 11 (x64 and arm64, separate binaries)
@@ -11,7 +12,8 @@
 Download the zip for your architecture from [Releases](../../releases), unpack it anywhere, run `pathmemo.exe`. Nothing is installed; nothing is written outside `%LOCALAPPDATA%\pathmemo`. The executable is not code-signed, so Windows warns about an unknown publisher: **More info → Run anyway**, or check the published SHA-256 first.
 
 ```
-pathmemo                 # double-click, or run with no arguments: the TUI
+pathmemo                 # double-click: the window (§24). From a terminal: help
+pathmemo --tui           # the terminal screens instead, in any terminal
 pathmemo scan            # scan every fixed volume
 pathmemo top --min 1GB   # largest files
 pathmemo audit           # where the invisible space went
@@ -38,10 +40,11 @@ Administrator rights are optional but change what the tool can see: with them th
 | P8 | Duplicates: five stages, hash cache, `dupes` / `--group` / `--apply`, TUI screen 5 | **done** — stage 0 cut 1.23M files to 8,508 candidates in 0.44 s |
 | P9 | USN incremental scan, scheduling | **done** — 337 tests green; the rescan is checked against a full scan of the same real tree, and the elevated journal read is not verified on hardware (§4.5.1) |
 | P10 | Polish, NativeAOT | **done** — lazy snapshot sections brought the TUI to **135 MB** against a 150 MB budget; `errors` / `export` / `config` finish §13; NativeAOT compiles clean but cannot be linked on the build machine (§19.4) |
+| P11 | GUI: own Win32 window, treemap, background scan | **done** — 126 MB and no trimming is what a framework would have cost, so the window is drawn by the same hand as the TUI (§24) |
 
-352 tests green.
+381 tests green.
 
-**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. An incremental rescan needs elevation too, because reading the change journal does — unelevated, every scan is a full one, and `doctor` says so (§4.5.1). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6). The published executable is still a framework-trimmed single file rather than NativeAOT: the code compiles to native with no warnings, but the machine that built this has no platform linker, so the 12 MB / 15 ms figure of §19.4 is a compilation that was never linked.
+**Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. An incremental rescan needs elevation too, because reading the change journal does — unelevated, every scan is a full one, and `doctor` says so (§4.5.1). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6). The window shows the volumes and the tree; audit, reclaim and duplicates are still the commands and the terminal screens, and each tab says so rather than pretending otherwise (§24.3). The published executable is still a framework-trimmed single file rather than NativeAOT: the code compiles to native with no warnings, but the machine that built this has no platform linker, so the 12 MB / 15 ms figure of §19.4 is a compilation that was never linked.
 
 ---
 
@@ -70,6 +73,7 @@ Administrator rights are optional but change what the tool can see: with them th
 21. [Acceptance criteria](#21-acceptance-criteria)
 22. [Testing](#22-testing)
 23. [Glossary](#23-glossary)
+24. [GUI](#24-gui)
 
 ---
 
@@ -103,14 +107,16 @@ pathmemo answers two questions: **where did the space go** — including what a 
 
 ## 2. Non-goals
 
-Explicitly out of scope: a GUI or web app as the primary interface *(a local treemap viewer is an optional Phase 3 extra)*; deletion without confirmation, "system speed-up", registry cleaning, anything of the optimiser genre; managing security settings (Defender exclusions, UAC, policy) — the tool *suggests* a command, the user runs it; a server, multi-user mode or cloud sync; perceptual hashing and similar-file search; network and removable drives as a primary scenario (supported degraded, not optimised); Linux and macOS — abstractions for them are deliberately **not** built in advance (§17.1).
+Explicitly out of scope: a web app, a browser-hosted interface, or any front end that needs a runtime installed alongside the exe; deletion without confirmation, "system speed-up", registry cleaning, anything of the optimiser genre; managing security settings (Defender exclusions, UAC, policy) — the tool *suggests* a command, the user runs it; a server, multi-user mode or cloud sync; perceptual hashing and similar-file search; network and removable drives as a primary scenario (supported degraded, not optimised); Linux and macOS — abstractions for them are deliberately **not** built in advance (§17.1).
 
 ## 2.1. Launch modes
 
 | Condition | Behaviour |
 |---|---|
-| Double-clicked from Explorer (the console was created for us) | TUI, window stays open |
-| `--interactive` / `-i` | TUI forced, from any terminal |
+| Double-clicked from Explorer (the console was created for us) | **the window** (§24); the console Explorer made is hidden |
+| `gui` / `--gui` | the window, from any terminal |
+| `--interactive` / `-i` / `--tui` | the terminal screens, from any terminal |
+| No window can be created (no desktop, a service account, SSH) | the terminal screens, then the line-based menu |
 | No arguments, from a terminal | help |
 | Arguments present | that command, non-interactive |
 | stdout redirected, no arguments | `status` — a text summary |
@@ -1378,6 +1384,8 @@ The export turned out to be the cheapest way to check several claims of §21 aga
 ---
 ## 14. TUI
 
+*From P11 this is one of two faces, not the only one.* A double-click opens the window of §24; `-i` and `--tui` ask for these screens, and they are what answers over SSH, on a machine with no desktop, and whenever a window cannot be created. Neither is a port of the other: they share the scanner, the snapshot, the analysis and the guard, and each draws them the way its medium allows.
+
 ### 14.1. Five screens, not eleven
 
 | # | Screen | Why |
@@ -1595,6 +1603,23 @@ pathmemo/
 │   │                              Colors (--no-color and NO_COLOR, one switch),
 │   │                              Diagnostics (PATHMEMO_DIAG=1, the numbers of §20)
 │   │
+│   ├── Gui/                        ← P11, the window (§24)
+│   │   ├── GuiHost.cs              opens the window, or declines so the TUI can
+│   │   ├── GuiWindow.cs            window class, message loop, DPI, dark title bar
+│   │   ├── GuiShell.cs             chrome, which view is up, where events go
+│   │   ├── Render/                 Rect, Colour (COLORREF byte order), Theme,
+│   │   │                           FontSet, Canvas (one DIB), IPainter +
+│   │   │                           GdiPainter, Draw (bar, tab, badge, scrollbar)
+│   │   ├── Controls/               HitMap (what is under the pointer, recorded
+│   │   │                           while painting), RowList (virtualised rows)
+│   │   ├── Views/                  OverviewView, TreeView, Treemap (squarified,
+│   │   │                           pure), ScanView
+│   │   └── Work/                   ScanJob (a scan on a worker; posts, never
+│   │                               touches the window)
+│   │
+│   ├── Text/                       Sanitizer - untrusted names (§14.4), shared by
+│   │                               both renderers since P11
+│   │
 │   ├── Tui/
 │   │   ├── TuiHost.cs             input loop and render, suspended during a scan
 │   │   ├── TuiSession.cs          snapshot, size mode, marks, ITuiView
@@ -1703,6 +1728,7 @@ RSS under 250 MB at a million files is reachable **only** if:
 | CLI parser | ~~System.CommandLine~~ → **own parsing** | **Not needed.** Ten commands with flat options are a 40-line `switch` plus `ArgParse`; the package would generate help that is written by hand here and more accurate, and would remain the main NativeAOT blocker (§19.4) |
 | Static output | ~~Spectre.Console~~ → **own** | **Not needed.** Our tables are three or four row formats with fixed columns, static output uses no colour at all, and progress is one rewritten line |
 | TUI | **own renderer** (§18.1, §14.7) | `ReadConsoleInputW` was not needed either: the BCL parses both VT sequences and virtual-key records |
+| GUI | ~~WinForms / WPF / WinUI 3 / Avalonia / WebView2~~ → **own Win32 window, GDI drawing** (§24.2) | **Measured, not assumed.** `UseWindowsForms=true` fails the build outright - `NETSDK1175`, trimming is not supported with Windows Forms - and untrimmed the same application is **126.10 MB** against 25.70 MB trimmed; suppressing the error instead produces `IL2104` on six framework assemblies, which `TreatWarningsAsErrors` turns into a failure. WPF costs the same, because an untrimmed self-contained build ships the whole 87 MB WindowsDesktop pack either way. WinUI 3 needs the Windows App SDK, which ends "no installer" on the first line of this document. Avalonia is ten packages against the two of §18, and a cross-platform surface §2 deliberately refuses. WebView2's own process is 80-150 MB against a **total** budget of 150 MB (§20). A window drawn by hand cost **0.27 MB** |
 | SQLite | **Microsoft.Data.Sqlite**, hand-written mapping | Dapper is reflection, hostile to trimming and AOT. One of the application's **two** PackageReferences; the trimmed single file grew from 19.5 to 22.5 MB |
 | Migrations | **`PRAGMA user_version` + embedded .sql** | DbUp is overkill (25 lines of own code) and breaks trimming |
 | Hashing | **XxHash128** (`System.IO.Hashing`) plus BCL `SHA256` | The second and last PackageReference, and the argument for it over BLAKE3: pure managed code, nothing native, nothing for trimming or AOT to trip over (§8.2) |
@@ -1730,7 +1756,7 @@ This project needs **one** complex screen (a virtualised tree), four simple ones
 
 | File | Size | Note |
 |---|---|---|
-| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) — and **25.70 MB at P10**: three commands, the lazy section reader and the diagnostics hook for 0.12 MB, which is what a codebase with no new dependencies costs |
+| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) — and **25.70 MB at P10**: three commands, the lazy section reader and the diagnostics hook for 0.12 MB, which is what a codebase with no new dependencies costs - and **25.96 MB at P11**, the entire window for **0.27 MB**, which is the number the whole of §24.2 exists to earn |
 | `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
 | `pathmemo-win-x64.zip` | **10.6 MB** | exe + README + LICENSE, built by `build\publish.ps1 -Zip` |
 
@@ -1832,6 +1858,9 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 | RSS during a walk scan | < 400 MB | **373 MB** peak working set (380 MB at P3, 478 MB with the first aggregates, 535 MB before file ids moved out of `RawEntry`). The live snapshot is 94 MB of that; the rest is transient GC heap |
 | RSS in the TUI with a snapshot open | < 150 MB | **met at P10: 134.9 MB** peak working set with a 1.58M-node snapshot open, measured from outside the process in a real console (was 182–201 MB). The tree is 94 MB and there is no longer a copy of it: sections inflate into the node arrays rather than into a `byte[]` first (§5.5). `pathmemo tree`, which loads the same snapshot without the screens, peaks at **121 MB**. The early 103 MB estimate used a snapshot half the size and ignored the transient |
 | Exporting a whole scan | — | **3.1 s** for 1,583,976 CSV rows (262 MB) and **4.2 s** for JSON (394 MB), at a 130 MB peak: the tree, one string builder pushed and popped per segment, and a writer flushed every 4,096 entries (§13.7) |
+| Window on screen from a cold start | < 500 ms | **222-261 ms**, process start plus the volumes and the last scan. The status report is collected before the window exists, so the first frame has real numbers in it rather than filling in afterwards (§24.7) |
+| RSS with the window open, no snapshot | - | **31.6 MB** |
+| RSS with the window open and a snapshot | < 150 MB | **128.2 MB** with 1.58M nodes, measured from outside the process - below the terminal screens' 134.9 MB, because the window holds no frame buffer and opens only the sections it reads (§5.5) |
 | Data directory size | **< 500 MB always** | hard limit |
 | Duplicate search, 1.2M files / 187 GB on C: | IO-bound | **5m18s**: stage 0 turned 1,228,950 files into 8,508 candidates in 0.44 s, and the disk did the rest — 39.6 GB read at ~125 MB/s with Defender on, not the 53.3 GB the candidates add up to, because the partial hash and the hard-link collapse take their share first. 1,347 duplicate groups (3,431 files, 9.94 GB) and 1,249 hard-link sets held out of the total. Second run, same disk: **1m29s** and 21.3 GB, 3,458 hashes from the cache |
 
@@ -1910,6 +1939,21 @@ Measured on: Ryzen 7, 32 GB, NVMe, Windows 11, 1.2M files / 420 GB on C:, Defend
 - [x] Logs never reach stdout while the TUI is up.
 - [x] `o` refuses `.exe`, `.lnk` and `.hta` — before the dialog, tested on `invoice.pdf.exe`.
 
+**GUI** *(P11)*
+- [x] A double-click opens a window, not a terminal - and the console Explorer made for it is hidden, while a window opened from a shell leaves that shell's window alone.
+- [x] The window falls back to the terminal screens when it cannot be created, rather than failing.
+- [x] The volumes, the last scan and this tool's own footprint are on screen without touching anything - verified against a real two-volume machine, with the bar drawn from the disk's own used space and the unaccounted gap named beside it.
+- [x] The tree browses a real 1.58M-node snapshot: double-click descends, the breadcrumb goes back up, the wheel and the arrows scroll, and the badges of §14.2 appear - checked at `C:\`, in `Users`, and one level further, including a Cyrillic directory name and a `reparse` point with nothing under it.
+- [x] A scan runs from the toolbar without freezing the window, reports entries, bytes, unreadable paths, elapsed time and the directory it is in, and can be stopped from either button.
+- [x] A stopped scan is reported as stopped, not finished: the snapshot is kept, the row says `cancelled`, and the overview says the totals are incomplete above them (principle P1).
+- [x] Closing the window during a scan stops the scan first rather than killing it mid-write.
+- [x] Both palettes are legible, including the title bar, and follow the system setting.
+- [x] The treemap's blocks are proportional, inside the frame and non-overlapping - asserted as properties, not as a golden image.
+- [x] A directory of 200,000 children draws ten rows, not 200,000.
+- [ ] A display at 125% or 150%, and dragging the window between monitors of different scale. The per-monitor-v2 path is written and untested: this machine has one monitor at 96 dpi (§24.7).
+- [ ] An elevated window. It inherits P9's unverified elevated journal read (§4.5.1).
+- [ ] arm64. The window has only ever run on x64.
+
 **Hygiene**
 - [x] Two instances: the second reads and refuses to write — verified against a database held by `BEGIN EXCLUSIVE`; in WAL mode reading is never blocked, and a write refuses with one warning while **still saving the snapshot**. Losing a 10-second scan over a busy history row would be worse.
 - [x] An unclean exit triggers `integrity_check` on the next start, a clean one does not — unit-tested both ways.
@@ -1987,6 +2031,14 @@ Actually invoking `vssadmin delete shadows`, `DISM /StartComponentCleanup` or `p
 
 ---
 
+### 22.6. The window (P11)
+
+The views are tested through a recording `IPainter`, so what a frame would say is asserted without a window, a message loop or a screenshot (§24.6). The treemap and the row virtualiser are pure and tested against their properties rather than against golden output: area proportional to value, no block outside the frame, no two blocks overlapping, and ten rows drawn out of two hundred thousand.
+
+What still needs a real window is driven by posting messages to its handle and photographed with `PrintWindow`. Both address the window directly rather than through the foreground, which is what makes this safe to run on a machine somebody is using: in P7 the same job done with `SendKeys` and a screen capture typed into the user's browser and photographed it (§22.5).
+
+---
+
 ## 23. Glossary
 
 | Term | Meaning |
@@ -2012,6 +2064,105 @@ Actually invoking `vssadmin delete shadows`, `DISM /StartComponentCleanup` or `p
 | **Remedy** | A way to act on a finding: a command, deleting paths, a system setting. |
 | **Degraded scan** | A scan without administrator rights, or on non-NTFS: slower and incomplete. |
 | **Unaccounted** | The gap between the volume's used space and everything pathmemo could explain. |
+
+---
+
+## 24. GUI
+
+*P11.* §2 used to list a GUI among the non-goals. That changed deliberately, and it changed on one condition: **the window is a second face, not a replacement**. Every command still exists, still prints the same JSON and still returns the same exit codes (principle P8), the terminal screens of §14 still answer where there is no desktop, and the single file on the first line of this document is still a single file. What the window adds is that somebody who does not want a command line no longer has to use one.
+
+### 24.1. Where it starts, and where it declines
+
+| Condition | Behaviour |
+|---|---|
+| Double-clicked from Explorer | the window; the console Explorer created for us is hidden |
+| `pathmemo gui` / `--gui` | the window, from any terminal, which keeps its own console |
+| `-i` / `--interactive` / `--tui` | the terminal screens of §14 |
+| `CreateWindowEx` fails | the terminal screens, then the line-based menu — the same ladder §2.1 already had, one rung longer |
+
+**The executable stays a console application.** A windowed subsystem would mean `pathmemo scan` printing nothing into the terminal it was typed into, and that is the whole of principle P8. So a double-click still gets a console — Explorer makes one — and the window hides it. It is hidden **only when it is ours**, the question `ConsoleOwnership` already answers for §2.1: run from a terminal, hiding the console would hide the user's own shell window, which is about the most destructive thing a GUI can do by accident. A console that was hidden is shown again before the process exits, because a fatal message still needs somewhere to go.
+
+**Elevation** is a button rather than a prompt. The manifest stays `asInvoker` (§4.2); *As administrator* relaunches through `ShellExecute` `runas` and tells the new copy to open a window, because answering a request for a window with a console would be a strange way to grant it.
+
+### 24.2. Drawn by hand, and what that saved
+
+The window is a registered Win32 class, a message loop, and one bitmap. There is no UI framework, and the reason is a measurement rather than a preference:
+
+| | Trimmed single file | Untrimmed |
+|---|---|---|
+| The application at P10 | **25.70 MB** | 83.50 MB |
+| With `UseWindowsForms=true` | **build fails**: `NETSDK1175` — trimming is not supported with Windows Forms | **126.10 MB** |
+| Suppressing that error | `IL2104` on `System.Windows.Forms`, `System.Windows.Forms.Primitives`, `System.Windows.Forms.Design`, `Microsoft.VisualBasic.Forms`, `System.CodeDom` and `System.Configuration.ConfigurationManager`, which `TreatWarningsAsErrors` turns into a failed build | — |
+| **The window written by hand (P11)** | **25.96 MB** | — |
+
+So a framework costs either the trimming this project is built around or five times the size, and in both cases the NativeAOT road of §19.4 — because neither Windows Forms nor WPF is AOT-compatible. Enabling WinForms also injects global `using System.Windows.Forms` and `System.Drawing`, which collide with this codebase's own `Screen` and `Timer`: the SDK offers no property to turn that off. WPF is not cheaper; an untrimmed self-contained build ships the entire 87 MB `Microsoft.WindowsDesktop.App` pack regardless of which of the two is used. WinUI 3 needs the Windows App SDK installed beside the exe. Avalonia is ten package references against the two of §18. WebView2 puts a browser process of 80–150 MB against a **total** budget of 150 MB (§20).
+
+The hand-written window cost **0.27 MB**. That is the same conclusion §18.1 reached about Terminal.Gui, reached again with numbers instead of a judgement.
+
+**GDI, not Direct2D**, because every shape this application draws is a rectangle, a line or a run of text: a table of bars, a tab strip, a treemap. GDI needs no factory, no device-loss handling and no extra assembly, and it renders text with the same ClearType as the rest of the desktop.
+
+**One bitmap per frame.** Everything is composed into a single `CreateDIBSection` surface and copied across in one `BitBlt`, and the class has no background brush so Windows never erases first. A window that paints its parts straight to the screen flickers; this is the same discipline the TUI's frame buffer follows for the same reason (§14.7). The surface only ever grows, so dragging a window larger does not reallocate several megabytes per `WM_SIZE`.
+
+**The window procedure is a function pointer**, `[UnmanagedCallersOnly]`, not a marshalled delegate: no reverse stub to generate, nothing for the garbage collector to take away while Windows still holds it, and the AOT road stays open. The managed object behind a handle is found through a `GCHandle` in the window's user data, recovered from `CREATESTRUCT` on `WM_NCCREATE` — the first message arrives before `CreateWindowEx` has returned, so there is no later moment at which the association could be made. **Nothing is allowed to throw out of the procedure**: an exception crossing into native code kills the process silently, so everything is caught, kept, and re-thrown on the thread that owns the loop once the loop has ended.
+
+**Per-monitor-v2 DPI** is requested before the first window exists, and every measurement in every view is written as the number it would be at 96 dpi and passed through `IPainter.Scale`. Fonts are rebuilt on `WM_DPICHANGED`, and their heights come from `GetTextMetrics` rather than from the point size, because the row height has to hold what the font mapper actually chose.
+
+**Light and dark** follow the system's own `AppsUseLightTheme`, including the title bar through `DWMWA_USE_IMMERSIVE_DARK_MODE`. The palette is one background, one surface, one border, three text weights and one accent; hovered, selected and the treemap's shading are all `Colour.Mix` between two of those, because a palette with an entry per state drifts. `PATHMEMO_THEME=light|dark` forces one, the way `PATHMEMO_ASCII=1` forces the glyph fallback (§14.7): checking how the other mode looks should not require changing a setting on the machine doing the checking.
+
+A `Colour` is a type rather than a `uint` because GDI's `COLORREF` is `0x00BBGGRR` — the bytes are the reverse of the `#RRGGBB` every palette is written in, and getting it backwards produces a window that is wrong in a way that looks deliberate.
+
+### 24.3. What is on screen
+
+A toolbar with the view tabs and the actions, the view, and a status line that says which scan the numbers came from and how old it is.
+
+**Overview** is the volumes, the last scan and this tool's own footprint against the 500 MB bound of principle P7. Free space comes from the volume and is current; everything else comes from a scan and is dated, so every stored number is shown with its scan id — the rule that `StatusReport` exists to enforce (§14.7), and it matters more in a window, where a number on a card looks live in a way a printed line does not. A scan that was stopped says so above its own totals.
+
+**Tree** is the main screen and the same shape as §14.2: children by size, a bar and a percentage relative to the current directory, the badges of §14.2, and the file count. Navigation is what a window can do that a terminal cannot — a double-click descends, the path above the list is clickable segment by segment, and the arrows, Page Up/Down, Home and End work as well. `m` cycles the size mode on the same key the TUI uses, because someone who knows one should not have to learn the other.
+
+**The map** is a treemap panel beside the table (§24.5), not instead of it. It is the first thing dropped when the window is narrow: the table answers every question the map does, and a map 200 pixels wide answers none.
+
+**Audit, Reclaim and Duplicates** are not in the window yet, and each tab says which command does that job today. That is the same promise the TUI's screens 4 and 5 made before P7 and P8 filled them in (§14.1) — an unfinished screen that names its replacement is not a dead end.
+
+**Hit testing is recorded while painting.** Each view registers the rectangles it drew into, and a click is resolved against what the last frame registered; there is no control tree and no second layout pass. This is not laziness, it is the property worth having in an application that deletes files: a retained hierarchy can disagree with the picture, and a row whose bounds were not updated after a resize is a click that hits the wrong thing. Here the only bounds that exist belong to something that was actually drawn, so *what you clicked* and *what you saw* cannot come apart. A modal seals the layers beneath it, so a click aimed at a dialog cannot reach the list behind.
+
+### 24.4. Work that takes time
+
+A walk of C: takes 40 seconds (§20), which is the difference between a window and a hung window. This is the one problem the terminal interface never had to solve: the TUI hands the console back and lets the scan print to it (§14.7), and a window has nothing to hand back.
+
+So a scan runs on a worker thread and reports through `IProgress<ScanProgress>` — **the same `ScanCommand.RunAsync` the command line calls**, given a different sink. The elevation offer, the reserved scan id, the snapshot, the history row and the bookkeeping when it fails are one implementation, not two; a second orchestration would be a second set of rules about what happens when the database is locked.
+
+**Nothing on the worker touches the window.** Progress is left in a field and a message is posted; the window collects the latest value when it arrives. The posts are **coalesced** — while one is outstanding no other is sent — so what the window reads is always the newest progress and never a backlog of thousands, which is what a progress display wants anyway.
+
+Stopping is the graceful cancellation of §4.8: what has been read is kept, the snapshot is written, the row says `cancelled` and the result carries `partial`. The window reports that as *stopped, totals incomplete* rather than *finished*, because exit code 3 and exit code 0 mean different things and a complete-looking total over an incomplete scan is exactly what principle P1 forbids. Closing the window during a scan stops it first and closes when it has finished, rather than killing it mid-write.
+
+### 24.5. The treemap
+
+Squarified (Bruls, Huizing and van Wijk), and a pure function: a list of sizes and a rectangle in, a list of rectangles out. The naive layout cuts the frame into parallel strips, which turns a directory of a hundred items into a hundred one-pixel slivers — visible, unclickable and unreadable. Squarifying fills the short side with a row whose worst aspect ratio stops improving, which produces blocks that can be aimed at with a mouse. That is the whole reason a treemap belongs in a window rather than in a terminal.
+
+Colour is the category (§6), because colour carries the one fact a size view cannot: 40 GB of media is a different decision from 40 GB of cache. Blocks below a few pixels are dropped rather than drawn — on a 1.2 million file disk the tail is most of the list and none of the area, and drawing it would make the map look detailed while showing nothing. The table beside it remains the complete answer.
+
+### 24.6. Testing a window without a window
+
+`IPainter` has two implementations, which is what §17.2 requires before an interface is allowed to exist: one draws with GDI, and one records. A view is therefore a function from state to a list of fills and text runs, and a test can assert what would appear — that a row carries the right size, that a directory is drawn with its separator and a file is not, that going into a directory and back leaves the cursor where it was, that nothing is drawn outside its clip — with no message loop, no desktop and no screenshot to compare. It is the same trick that made the TUI's frames testable (§22).
+
+The treemap is tested against its two properties directly: every block's area is its share of the space, and no block leaves the frame or overlaps another. Virtualisation is tested by asking a list of 200,000 rows to paint and counting how many were drawn. The `COLORREF` byte order has a test of its own, because it is the one mistake in this layer that produces a result which looks intentional.
+
+Everything else needs a real window, and P11 used one: the window is driven by posting input to its handle and photographed with `PrintWindow`, which copies a window's own pixels without bringing it to the front. Neither step needs the foreground, so nothing can be typed into the user's browser and no screenshot can be of something else — the hazard that actually happened in P7 (§22.5).
+
+### 24.7. What P11 measured, and what it did not
+
+| | |
+|---|---|
+| Published size | **25.96 MB**, up 0.27 MB from P10 |
+| Window on screen from a cold start | **222–261 ms**, including reading the volumes and the last scan |
+| Working set, window open, no snapshot | **31.6 MB** |
+| Working set, 1.58M-node snapshot open | **128.2 MB** against the 150 MB budget of §20 — the terminal screens are 134.9 MB for the same snapshot |
+| `--version` from the same binary | **61–63 ms**, unchanged |
+| Tests | **381**, of which 29 are the window's |
+
+Verified live, at 1180×760 on this machine: the volumes and their bars against the disk's own used space; the tree at `C:\` and two levels down, with the breadcrumb, the scrollbar, the `reparse` and `partial` badges and a Cyrillic directory name; drilling in by double-click; the treemap; a scan started from the toolbar, reporting 13,673 entries and 95.5 GB after six seconds while the window stayed responsive; stopping it from the toolbar, and the partial scan recorded as `cancelled` with the overview updating to it; and both palettes, forced with `PATHMEMO_THEME`.
+
+**Not verified.** The window has only been seen at 96 dpi on one monitor: the per-monitor-v2 path, `WM_DPICHANGED` and dragging between displays of different scale are written but untested, and that is the most likely place for the first real bug. The same goes for an elevated window, which inherits P9's unverified elevated journal read (§4.5.1). Nothing has been tested on arm64.
 
 ---
 

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace PathMemo.Tui.Terminal;
+namespace PathMemo.Text;
 
 /// <summary>
 /// Makes a file name safe to draw (README section 14.4).
@@ -33,9 +33,16 @@ namespace PathMemo.Tui.Terminal;
 /// </remarks>
 internal static class Sanitizer
 {
-    /// <summary>Stands in for a control character: one column wide, visible, unambiguous.</summary>
-    // MIDDLE DOT, or a question mark where the font cannot draw one.
-    private static char Replacement => Glyphs.ControlChar;
+    /// <summary>
+    /// Stands in for a control character: one column wide, visible, unambiguous.
+    /// </summary>
+    /// <remarks>
+    /// MIDDLE DOT by default. It is settable because the stand-in belongs to whoever draws,
+    /// not to this function: a console handed a raster font cannot draw U+00B7 and asks for
+    /// <c>?</c> instead (<c>Glyphs.Ascii</c>), while the GUI's Segoe UI always can. Sanitising
+    /// itself is a rule about untrusted input (README section 14.4) and is the same for both.
+    /// </remarks>
+    internal static char Replacement { get; set; } = '·';
 
     internal static string Clean(string raw)
     {

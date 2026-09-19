@@ -6,6 +6,7 @@ using PathMemo.Config;
 using PathMemo.Platform;
 using PathMemo.Snapshots;
 using PathMemo.Tui.Dialogs;
+using PathMemo.Text;
 using PathMemo.Tui.Terminal;
 
 namespace PathMemo.Tui.Screens;

@@ -5,6 +5,7 @@ using PathMemo.Cli.Output;
 using PathMemo.Config;
 using PathMemo.Deletion;
 using PathMemo.Tui.Dialogs;
+using PathMemo.Text;
 using PathMemo.Tui.Terminal;
 
 namespace PathMemo.Tui.Screens;

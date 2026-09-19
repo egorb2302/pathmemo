@@ -231,6 +231,15 @@ internal static partial class Kernel32Extra
         uint dwCreationDisposition,
         uint dwFlagsAndAttributes,
         nint hTemplateFile);
+
+    /// <summary>
+    /// The running image, for reading a resource out of it. A null name means this executable,
+    /// which is the only sensible way to reach the icon of a single-file build: there is no
+    /// separate file on disk to name (README section 19.1).
+    /// </summary>
+    [LibraryImport(Dll, EntryPoint = "GetModuleHandleW", SetLastError = true,
+        StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint GetModuleHandle(string? lpModuleName);
 }
 
 /// <summary>FILE_STANDARD_INFO (GetFileInformationByHandleEx class 1).</summary>

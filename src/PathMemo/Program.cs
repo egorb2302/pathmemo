@@ -3,6 +3,7 @@ using PathMemo.Cli;
 using PathMemo.Cli.Commands;
 using PathMemo.Cli.Interactive;
 using PathMemo.Config;
+using PathMemo.Gui;
 using PathMemo.Platform;
 using PathMemo.Tui;
 
@@ -78,8 +79,9 @@ internal static class Program
                 "--version" or "-V" => PrintVersion(),
                 // No arguments: an interactive session if the window is ours to keep open
                 // (double-clicked from Explorer), otherwise plain help for a shell.
-                "--interactive" or "-i" => await InteractiveAsync(cancellation.Token),
-                "" when ConsoleOwnership.OwnsTheWindow => await InteractiveAsync(cancellation.Token),
+                "gui" or "--gui" => await WindowedAsync(cancellation.Token),
+                "--interactive" or "-i" or "--tui" => await InteractiveAsync(cancellation.Token),
+                "" when ConsoleOwnership.OwnsTheWindow => await WindowedAsync(cancellation.Token),
                 // A pipe gets the summary rather than the help text: something read this,
                 // and "here is how to use me" answers nothing (README section 14.5).
                 "" when Console.IsOutputRedirected => StatusCommand.Run(),
@@ -140,6 +142,28 @@ internal static class Program
     /// </summary>
     private static async Task<int> InteractiveAsync(CancellationToken ct) =>
         TuiHost.TryRun(ct, out var code) ? code : await Launcher.RunAsync(ct);
+
+    /// <summary>
+    /// The window, falling back to the terminal interface when there is no desktop to put one on
+    /// (README section 24.1).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what a double-click gets from P11 on, which is the point of the whole phase: the
+    /// person who does not want a terminal should not be handed one. The terminal interface has
+    /// not gone anywhere - <c>-i</c> and <c>--tui</c> ask for it, and it is what answers over
+    /// SSH, in a session with no window manager, and on a machine where the window fails to
+    /// open.
+    /// </para>
+    /// <para>
+    /// <c>GuiHost.TryRun</c> is called before this method's first <c>await</c> on purpose. A
+    /// message loop belongs to the thread that created its window, and after an await the
+    /// continuation could be on a thread-pool thread - which would work until the day it does
+    /// not.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> WindowedAsync(CancellationToken ct) =>
+        GuiHost.TryRun(out var code) ? code : await InteractiveAsync(ct);
 
     private static void ConfigureConsole()
     {
@@ -654,8 +678,9 @@ internal static class Program
               pathmemo <command> [options]
 
             COMMANDS
-              (none)              the screens, when launched from Explorer or with -i
-              --interactive, -i   the screens, forced (needs a real terminal)
+              (none)              the window, when launched from Explorer
+              gui, --gui          the window, forced, from any terminal
+              --interactive, -i   the terminal screens instead (also --tui)
               status              volumes, last scan and store, as plain text
               scan [<path>...]    traverse the given roots, or every fixed volume
               tree [<path>]       one level of the last scan, largest first

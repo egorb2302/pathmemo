@@ -3,6 +3,7 @@ using PathMemo.Analysis;
 using PathMemo.Cli.Output;
 using PathMemo.Platform;
 using PathMemo.Snapshots;
+using PathMemo.Text;
 using PathMemo.Tui.Terminal;
 
 namespace PathMemo.Tui.Dialogs;
