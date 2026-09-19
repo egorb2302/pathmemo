@@ -48,7 +48,7 @@ internal enum GuiAction
 /// </remarks>
 internal sealed class GuiShell
 {
-    private readonly GuiWindow _window;
+    private readonly IShellWindow _window;
     private readonly HitMap _hits = new();
     private readonly OverviewView _overview = new();
     private readonly TreeView _tree = new();
@@ -61,7 +61,7 @@ internal sealed class GuiShell
     private Scanning.ScanProgress? _progress;
     private bool _closeWhenIdle;
 
-    internal GuiShell(GuiWindow window, StatusReport report)
+    internal GuiShell(IShellWindow window, StatusReport report)
     {
         _window = window;
         Report = report;
@@ -423,7 +423,12 @@ internal sealed class GuiShell
             if (!SnapshotLoader.TryLoad(null, SnapshotParts.Tree | SnapshotParts.Volumes,
                     out var snapshot, out var id))
             {
-                Show(GuiView.Tree);
+                // Switch, not Show: Show would come straight back here, because what sends it
+                // here is the absence of a snapshot and that is exactly what has just failed
+                // to change. Until this was split in two the pair called each other until the
+                // stack ran out, and a machine with nothing scanned yet lost the process the
+                // moment the Tree tab was clicked (README section 24.6).
+                Switch(GuiView.Tree);
                 Say("No snapshot to browse yet. Press Scan.");
                 return;
             }
@@ -435,9 +440,17 @@ internal sealed class GuiShell
             _tree.Load(_tree.Snapshot!, _tree.ScanId, preferredLetter);
         }
 
-        Show(GuiView.Tree);
+        Switch(GuiView.Tree);
     }
 
+    /// <summary>
+    /// Asks for a view, loading the tree first if that is what it takes.
+    /// </summary>
+    /// <remarks>
+    /// The one place that decides. Everything it can decide to do ends in <see cref="Switch"/>,
+    /// which decides nothing - and that is the whole point of there being two methods rather
+    /// than one: a decision that can re-enter itself is a decision that can loop.
+    /// </remarks>
     private void Show(GuiView view)
     {
         // Switching to the tree by tab or by key has to load it too, or the one route that
@@ -448,6 +461,12 @@ internal sealed class GuiShell
             return;
         }
 
+        Switch(view);
+    }
+
+    /// <summary>Makes a view the current one. Asks nothing and calls nothing back.</summary>
+    private void Switch(GuiView view)
+    {
         if (view == Active) return;
 
         Active = view;

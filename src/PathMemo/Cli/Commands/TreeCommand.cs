@@ -191,7 +191,13 @@ internal static class SnapshotLoader
             Diagnostics.Memory(Console.Error, "with a snapshot open", snapshot.Tree.Count);
             return true;
         }
-        catch (InvalidDataException ex)
+        // InvalidDataException is a snapshot that parsed wrong; IOException is one that could
+        // not be read at all. The second is not hypothetical: the entry above came from
+        // listing the directory, and retention or another process can take the file away
+        // between the listing and the open. A command can survive an exception escaping here
+        // by printing a stack trace; the window cannot, and this method's whole contract is
+        // to explain rather than throw.
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"pathmemo: snapshot {entry.Id} is unreadable: {ex.Message}");
             return false;

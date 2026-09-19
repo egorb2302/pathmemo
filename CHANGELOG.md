@@ -7,6 +7,41 @@ Release notes (`build/release-notes.ps1`), so this file is the one place a
 release is described. A build reports the tag it was cut from as
 `pathmemo --version`.
 
+## [0.2.1] — 2026-09-19
+
+A fix for a crash that made the window unusable on exactly the machine it was most likely
+to be opened on: one where nothing has been scanned yet.
+
+### Fixed
+
+- **The window closed instead of showing the tree.** With no scan on record, clicking
+  **Tree** — or a volume card, which is the other way in — ended the process on the spot,
+  with no message and no error. Two methods called each other until the stack ran out, two
+  frames short of the line that says to run a scan. Every first run was affected, because
+  having no snapshot is what a new install *is*. The window now says there is nothing to
+  browse yet and stays open.
+- **A snapshot that cannot be opened is now reported rather than thrown.** One that has
+  been deleted by retention, or is held open by another process, between being listed and
+  being read used to escape as an unhandled exception: a stack trace on the command line,
+  and the same instant close in the window.
+
+### Known limitations of this release
+
+Unchanged from 0.2.0, and worth repeating on the page you are reading:
+
+- The window shows the volumes and the tree. Audit, reclaim and duplicates are the commands
+  and the terminal screens for now, and each tab in the window says so.
+- The window has only been run on x64 at 96 dpi on a single monitor. The arm64 binary is
+  built and tested by the same suite, but its window is unverified, as is scaling above
+  100% and dragging between monitors of different scale.
+- Unelevated, the walk scanner runs: some paths are unreadable, hard-link deduplication
+  covers only files of 1 MB and over, and alternate data streams are not counted. Elevation
+  removes all three.
+
+388 tests, passing both as an ordinary user and as an administrator. Six of them are new and
+cover the window's navigation, which had no tests at all before this release — see
+[README](README.md) §24.6 for why that was, and what it cost.
+
 ## [0.2.0] — 2026-09-19
 
 The first public release: one self-contained `pathmemo.exe`, no installer and no

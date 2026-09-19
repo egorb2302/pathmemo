@@ -44,7 +44,7 @@ internal readonly record struct KeyInput(int VirtualKey, char Char, bool Ctrl, b
 /// thread that owns the loop once the loop has ended.
 /// </para>
 /// </remarks>
-internal sealed class GuiWindow : IDisposable
+internal sealed class GuiWindow : IDisposable, IShellWindow
 {
     private const string ClassName = "pathmemo.window";
 
@@ -59,24 +59,24 @@ internal sealed class GuiWindow : IDisposable
 
     internal uint Dpi { get; private set; } = 96;
 
-    internal Theme Theme { get; private set; } = Theme.FromSystem();
+    public Theme Theme { get; private set; } = Theme.FromSystem();
 
     /// <summary>The exception a callback could not let escape, re-thrown by <see cref="Run"/>.</summary>
     private Exception? _failure;
 
-    internal Action<IPainter, Rect>? OnPaint { get; set; }
+    public Action<IPainter, Rect>? OnPaint { get; set; }
 
-    internal Action<MouseInput>? OnMouse { get; set; }
+    public Action<MouseInput>? OnMouse { get; set; }
 
-    internal Action<KeyInput>? OnKey { get; set; }
+    public Action<KeyInput>? OnKey { get; set; }
 
     /// <summary>A message posted from a worker thread (README section 24.4).</summary>
-    internal Action<uint, nuint>? OnPosted { get; set; }
+    public Action<uint, nuint>? OnPosted { get; set; }
 
-    internal Action? OnThemeChanged { get; set; }
+    public Action? OnThemeChanged { get; set; }
 
     /// <summary>Asked before closing; false keeps the window open.</summary>
-    internal Func<bool>? OnClosing { get; set; }
+    public Func<bool>? OnClosing { get; set; }
 
     /// <summary>The smallest useful window, in 96-dpi design pixels.</summary>
     internal (int Width, int Height) MinimumSize { get; set; } = (920, 560);
@@ -142,17 +142,17 @@ internal sealed class GuiWindow : IDisposable
         if (_failure is not null) throw _failure;
     }
 
-    internal void Invalidate() => User32.InvalidateRect(Handle, nint.Zero, false);
+    public void Invalidate() => User32.InvalidateRect(Handle, nint.Zero, false);
 
     internal void SetTitle(string title) => User32.SetWindowText(Handle, title);
 
     /// <summary>
     /// Wakes the window from any thread. The only safe way for background work to reach the UI.
     /// </summary>
-    internal void Post(uint message, nuint argument = 0) =>
+    public void Post(uint message, nuint argument = 0) =>
         User32.PostMessage(Handle, User32.WmAppFirst + message, argument, 0);
 
-    internal void Close() => User32.PostMessage(Handle, User32.WmClose, 0, 0);
+    public void Close() => User32.PostMessage(Handle, User32.WmClose, 0, 0);
 
     private static bool Register()
     {

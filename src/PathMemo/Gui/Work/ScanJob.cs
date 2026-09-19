@@ -36,13 +36,13 @@ internal sealed class ScanJob : IProgress<ScanProgress>
     /// <summary>Posted once, when the scan has finished, failed or been cancelled.</summary>
     internal const uint FinishedMessage = 2;
 
-    private readonly GuiWindow _window;
+    private readonly IShellWindow _window;
     private readonly CancellationTokenSource _cancel = new();
 
     private ScanProgress? _latest;
     private int _pending;
 
-    internal ScanJob(GuiWindow window, IReadOnlyList<string> roots)
+    internal ScanJob(IShellWindow window, IReadOnlyList<string> roots)
     {
         _window = window;
         Roots = roots;
