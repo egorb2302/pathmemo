@@ -96,7 +96,17 @@ jobs:
               $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
               "$hash  $($_.Name)"
           }
-          $lines | Set-Content dist\SHA256SUMS.txt -Encoding ascii
+          # LF, not CRLF. Set-Content writes Windows endings, and `sha256sum -c` - which
+          # is how this file is actually used, in Git Bash, WSL or on a Linux box - then
+          # looks for a file whose name ends in a carriage return and reports every line
+          # as FAILED. The v0.2.0 file shipped that way: the hashes were right and the
+          # canonical way to check them did not work, which is the whole point of
+          # publishing it (README section 19.3).
+          [IO.File]::WriteAllText(
+              (Join-Path $PWD 'dist\SHA256SUMS.txt'),
+              ($lines -join "`n") + "`n",
+              (New-Object Text.ASCIIEncoding))
+
           $lines | ForEach-Object { Write-Host $_ }
 
       # Generated from CHANGELOG.md rather than written here, so the download page and
@@ -112,7 +122,7 @@ jobs:
             -OutFile dist\RELEASE_NOTES.md
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pathmemo-${{ steps.version.outputs.value }}
           path: |

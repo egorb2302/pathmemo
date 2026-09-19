@@ -1793,7 +1793,7 @@ dotnet publish src/PathMemo/PathMemo.csproj \
 2. `dotnet test -c Release` — a release that fails its own tests should not exist;
 3. publishes `win-x64` and `win-arm64` (the arm64 cross-build from an x64 host is verified: 24.6 MB, 30 s);
 4. stamps the version from the tag (`v0.2.0` → `pathmemo --version` = `0.2.0`), so the title bar and the release cannot disagree;
-5. writes `SHA256SUMS.txt` beside them — a self-contained exe from an unknown author should be verifiable;
+5. writes `SHA256SUMS.txt` beside them, with **LF** endings — a self-contained exe from an unknown author should be verifiable, and `sha256sum -c` is how that is done; v0.2.0 shipped the file with CRLF, so every line came back `FAILED` because the filename it looked for ended in a carriage return. Correct hashes that cannot be checked by the one command anybody would use are not a checksum file;
 6. builds the notes from that `CHANGELOG.md` section with `build\release-notes.ps1`, which prepends what a first-time downloader needs (which file, how to start it, why Windows is about to warn them) and rewrites the changelog's relative links to absolute ones **at that tag**, so a reader lands on the document this build was cut from;
 7. creates the release with `gh release create --notes-file` (`gh` is preinstalled on the runner), keeping third-party actions out of the supply chain.
 
