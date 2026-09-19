@@ -68,5 +68,6 @@ runtime to install alongside it.
   deduplication covers only files of 1 MB and over, and alternate data streams
   are not counted. Elevation removes all three.
 
-381 tests, and the full list of what is measured rather than claimed is in
+382 tests, passing both as an ordinary user and as an administrator, and the full list
+of what is measured rather than claimed is in
 [README](README.md) §21.
