@@ -1,0 +1,56 @@
+# Builds and tests every push. Nothing is published and nothing is released.
+#
+# This exists because of how release run #1 failed: a compile error that no local build
+# could reproduce sat on master for weeks and was discovered by the tag push, at the one
+# moment when a red pipeline means no download. Releasing was never the thing that needed
+# checking - compiling on a machine that is not this one was.
+#
+# Deliberately separate from release.yml rather than another trigger on it: a release
+# builds two runtimes, zips them, hashes them and writes notes, which is five minutes of
+# work that says nothing extra about whether the code is sound.
+
+name: ci
+
+# master and pull requests, not every branch: a pull request from a branch in this
+# repository would otherwise match both triggers and build the same commit twice.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push supersedes the first: the answer about the older commit stops being
+# interesting the moment a newer one exists.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The exact SDK global.json pins, for the reason recorded there: a newer feature
+      # band is a different Roslyn, and a different Roslyn is what broke run #1.
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '9.0.318'
+
+      # First, so a toolchain that is not the pinned one is the first line of the log.
+      - name: Toolchain
+        shell: pwsh
+        run: dotnet --version
+
+      # Integration tests build a real tree in %TEMP% - junctions, hard links, sparse
+      # files - which the Windows runner allows.
+      - name: Test
+        run: dotnet test -c Release --nologo
+
+      # Publishing is part of the check, not an extra: trimming, ReadyToRun and the
+      # single-file host only run here, and an IL2xxx warning that TreatWarningsAsErrors
+      # turns into a failure would otherwise wait for a tag to be discovered. One runtime
+      # is enough for that - the arm64 cross-build is the release job's business.
+      - name: Publish win-x64
+        shell: pwsh
+        run: ./build/publish.ps1 -Runtime win-x64
