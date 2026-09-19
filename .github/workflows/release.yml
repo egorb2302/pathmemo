@@ -7,6 +7,11 @@
 # Releases are the mechanism for standalone binaries, and they need nothing from
 # the person downloading.
 #
+# Before tagging: CHANGELOG.md needs a "## [<version>]" section and
+# Directory.Build.props the matching <Version>. The notes on the download page are
+# generated from that section, and the workflow checks it exists before it builds
+# anything - a tag pushed without it fails in seconds rather than after two publishes.
+#
 # Trigger:  git tag v0.2.0 && git push origin v0.2.0
 # Dry run:  Actions -> release -> Run workflow (builds and uploads artifacts,
 #           creates no release).
@@ -26,24 +31,19 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # Installs the .NET 9 SDK; global.json is what makes the muxer actually use it.
-      # The runner image also carries a newer SDK, and without the pin `dotnet` would
-      # silently pick that one and compile with a different language version.
-      - uses: actions/setup-dotnet@v4
+      # The exact SDK global.json pins, not '9.0.x'. Asking for the latest 9.0 installs a
+      # newer feature band than any local build uses, and the one release run this pipeline
+      # has ever had died of exactly that: a compiler that resolved an overload differently
+      # (see global.json). The version here and the one in global.json move together.
+      - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '9.0.318'
 
       - name: Toolchain
         shell: pwsh
         run: dotnet --version
-
-      # The suite is the gate: a release that fails its own tests should not exist.
-      # Integration tests build a real tree in %TEMP% (junctions, hard links, sparse
-      # files), which the Windows runner allows.
-      - name: Test
-        run: dotnet test -c Release --nologo
 
       - name: Read the version from the tag
         id: version
@@ -54,13 +54,37 @@ jobs:
           "value=$version" >> $env:GITHUB_OUTPUT
           Write-Host "building $version"
 
+      # Cheap and first: the changelog section is what the download page will say, and
+      # discovering it is missing after the builds have run means either a release with
+      # empty notes or a re-tag. Also catches the version in Directory.Build.props
+      # disagreeing with the tag, which would ship a build whose --version is wrong.
+      - name: Check the changelog and the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.value }}"
+          ./build/release-notes.ps1 -Version $version | Out-Null
+          Write-Host "CHANGELOG.md describes $version"
+
+          $props = Get-Content Directory.Build.props -Raw
+          if ($props -notmatch "<Version>$([regex]::Escape($version))</Version>") {
+              throw "Directory.Build.props does not say <Version>$version</Version> - the tag and the source disagree"
+          }
+          Write-Host "Directory.Build.props agrees"
+
+      # The suite is the gate: a release that fails its own tests should not exist.
+      # Integration tests build a real tree in %TEMP% (junctions, hard links, sparse
+      # files), which the Windows runner allows.
+      - name: Test
+        run: dotnet test -c Release --nologo
+
       - name: Publish win-x64
         shell: pwsh
-        run: ./build/publish.ps1 -Runtime win-x64 -Version ${{ steps.version.outputs.value }} -Zip
+        run: ./build/publish.ps1 -Runtime win-x64 -Version '${{ steps.version.outputs.value }}' -Zip
 
       - name: Publish win-arm64
         shell: pwsh
-        run: ./build/publish.ps1 -Runtime win-arm64 -Version ${{ steps.version.outputs.value }} -Zip
+        run: ./build/publish.ps1 -Runtime win-arm64 -Version '${{ steps.version.outputs.value }}' -Zip
 
       # Published next to the downloads so anyone can check what they got. A
       # self-contained exe from an unknown author is exactly the kind of file
@@ -74,6 +98,18 @@ jobs:
           }
           $lines | Set-Content dist\SHA256SUMS.txt -Encoding ascii
           $lines | ForEach-Object { Write-Host $_ }
+
+      # Generated from CHANGELOG.md rather than written here, so the download page and
+      # the repository cannot disagree about what this release contains.
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          ./build/release-notes.ps1 `
+            -Version '${{ steps.version.outputs.value }}' `
+            -Checksums dist\SHA256SUMS.txt `
+            -RepoUrl '${{ github.server_url }}/${{ github.repository }}' `
+            -OutFile dist\RELEASE_NOTES.md
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -90,30 +126,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = "${{ steps.version.outputs.value }}"
-          $notes = @"
-          Windows 10 1809 or later, x64 or arm64. No installer and no runtime to
-          install: one file, self-contained.
-
-          1. Download ``pathmemo-$version-win-x64.zip`` (or ``-win-arm64`` on an ARM machine).
-          2. Unpack it anywhere.
-          3. Double-click ``pathmemo.exe``, or run it from a terminal: ``pathmemo scan``, ``pathmemo top --min 1GB``, ``pathmemo audit``.
-
-          Windows will warn that the publisher is unknown - the executable is not
-          code-signed. Choose **More info -> Run anyway**, or check the SHA-256 below
-          against your download first.
-
-          The tool never deletes anything on its own; deletion arrives in a later
-          version, behind an explicit confirmation.
-
-          ``````
-          $(Get-Content dist\SHA256SUMS.txt -Raw)
-          ``````
-          "@
 
           # Built as one argument array rather than a line-continued command: the
           # file list is dynamic, and splatting keeps every path one argument.
+          # --notes-file rather than --notes: the notes are markdown with backticks and
+          # fenced blocks in them, and passing that as a command-line argument is one
+          # quoting mistake away from a mangled download page.
           $files = @((Get-ChildItem dist\*.zip).FullName) + @((Get-Item dist\SHA256SUMS.txt).FullName)
           $ghArgs = @('release', 'create', '${{ github.ref_name }}') + $files +
-                    @('--title', "pathmemo $version", '--notes', $notes)
+                    @('--title', "pathmemo $version", '--notes-file', 'dist\RELEASE_NOTES.md')
 
           gh @ghArgs

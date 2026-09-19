@@ -9,7 +9,7 @@ Double-click it for a window; type it for a command line. The same one file does
 
 ## Install
 
-Download the zip for your architecture from [Releases](../../releases), unpack it anywhere, run `pathmemo.exe`. Nothing is installed; nothing is written outside `%LOCALAPPDATA%\pathmemo`. The executable is not code-signed, so Windows warns about an unknown publisher: **More info → Run anyway**, or check the published SHA-256 first.
+Download the zip for your architecture from [Releases](../../releases), unpack it anywhere, run `pathmemo.exe`. Nothing is installed; nothing is written outside `%LOCALAPPDATA%\pathmemo`. The executable is not code-signed, so Windows warns about an unknown publisher: **More info → Run anyway**, or check the published SHA-256 first. What each release contains — and what it cannot do yet — is in [CHANGELOG.md](CHANGELOG.md).
 
 ```
 pathmemo                 # double-click: the window (§24). From a terminal: help
@@ -1584,6 +1584,7 @@ Every row is a real scenario, not a theoretical one.
 ```
 pathmemo/
 ├── pathmemo.sln  ·  Directory.Build.props  ·  global.json (pins the SDK to .NET 9)
+├── CHANGELOG.md                       ← what each release is; the notes are built from it (§19.3)
 ├── src/PathMemo/                      ← all the code, separated by folders
 │   ├── Program.cs  ·  app.manifest (longPathAware, asInvoker)  ·  Resources/app.ico
 │   │
@@ -1758,7 +1759,7 @@ This project needs **one** complex screen (a virtualised tree), four simple ones
 |---|---|---|
 | `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) — and **25.70 MB at P10**: three commands, the lazy section reader and the diagnostics hook for 0.12 MB, which is what a codebase with no new dependencies costs - and **25.96 MB at P11**, the entire window for **0.27 MB**, which is the number the whole of §24.2 exists to earn |
 | `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
-| `pathmemo-win-x64.zip` | **10.6 MB** | exe + README + LICENSE, built by `build\publish.ps1 -Zip` |
+| `pathmemo-win-x64.zip` | **11.9 MB at v0.2.0** | exe + README + LICENSE + CHANGELOG, built by `build\publish.ps1 -Zip`; the arm64 zip is 11.5 MB |
 
 **The icon** (`Resources\app.ico`) is drawn by `build\make-icon.ps1` rather than committed as an unreadable binary: the shape is twelve lines of code, and regenerating it is cheaper than explaining what is inside a blob. Sizes 16–64 are stored as classic DIBs and 128/256 as PNG: the Windows shell understands PNG inside an ICO but GDI+ does **not**, while everything reads the small sizes.
 
@@ -1788,11 +1789,17 @@ dotnet publish src/PathMemo/PathMemo.csproj \
 
 `.github/workflows/release.yml`, on a `v*` tag:
 
-1. `dotnet test -c Release` — a release that fails its own tests should not exist;
-2. publishes `win-x64` and `win-arm64` (the arm64 cross-build from an x64 host is verified: 24.6 MB, 30 s);
-3. stamps the version from the tag (`v0.2.0` → `pathmemo --version` = `0.2.0`), so the title bar and the release cannot disagree;
-4. writes `SHA256SUMS.txt` beside them — a self-contained exe from an unknown author should be verifiable;
-5. creates the release with `gh release create` (preinstalled on the runner), keeping third-party actions out of the supply chain.
+1. checks that `CHANGELOG.md` has a section for the tag and that `<Version>` in `Directory.Build.props` is the same number — a second of work, before the builds, against the two ways a tag goes wrong: a release page with nothing on it, and a binary whose `--version` is not the release it was downloaded from;
+2. `dotnet test -c Release` — a release that fails its own tests should not exist;
+3. publishes `win-x64` and `win-arm64` (the arm64 cross-build from an x64 host is verified: 24.6 MB, 30 s);
+4. stamps the version from the tag (`v0.2.0` → `pathmemo --version` = `0.2.0`), so the title bar and the release cannot disagree;
+5. writes `SHA256SUMS.txt` beside them — a self-contained exe from an unknown author should be verifiable;
+6. builds the notes from that `CHANGELOG.md` section with `build\release-notes.ps1`, which prepends what a first-time downloader needs (which file, how to start it, why Windows is about to warn them) and rewrites the changelog's relative links to absolute ones **at that tag**, so a reader lands on the document this build was cut from;
+7. creates the release with `gh release create --notes-file` (`gh` is preinstalled on the runner), keeping third-party actions out of the supply chain.
+
+**The toolchain is pinned to one feature band, not just to .NET 9.** The first run this pipeline ever had failed, and not on anything to do with releasing: `SnapshotFile.cs` would not compile on the runner — *cannot convert from `ReadOnlySpan<byte>` to `Span<byte>`* — against code that built clean locally. `MemoryMarshal.AsBytes(T[])` binds to both the `Span<T>` and the `ReadOnlySpan<T>` overload, an array converts to either, and a newer Roslyn in a newer feature band picked the other one. The call site is explicit now (`AsBytes(array.AsSpan())`), but the general lesson is about the toolchain rather than that line: `rollForward: latestFeature` let the band float, which is the very drift the `global.json` comment claims to prevent. So `global.json` names an exact band and `setup-dotnet` is given that exact version instead of `9.0.x` — CI compiles with the compiler the tests were run against, and raising it is a commit. The `Toolchain` step prints `dotnet --version` first so a mismatch is the first line of the log rather than an error 40 seconds in.
+
+**The notes are generated, not written in the workflow.** Notes typed into a YAML here-string drift from the changelog, and the drift only becomes visible on the download page after the tag is pushed. At P11 the inline notes still read *"the tool never deletes anything on its own; deletion arrives in a later version"* — three phases after `rm`, quarantine and `reclaim --apply` shipped. One source, checked before the build, is the fix. `--notes-file` rather than `--notes` for the same reason a painter sanitises every string (§14.4): markdown full of backticks and fenced blocks should not travel through a command line.
 
 ```bash
 git tag v0.2.0

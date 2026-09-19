@@ -1,8 +1,9 @@
 {
   "//": "Pins the toolchain to .NET 9. Without this the muxer picks the newest SDK on the machine, and a CI runner with .NET 10 preinstalled compiles the code with a different language version than any local build - which is how a green branch produced a red pipeline.",
+  "//2": "The feature band is pinned too, not just the major.minor, because 'latestFeature' did not deliver what the line above promises. Release run #1 failed on the runner with 'cannot convert from ReadOnlySpan<byte> to Span<byte>' in SnapshotFile.cs against code that built clean on 9.0.3xx: MemoryMarshal.AsBytes(T[]) binds to both the Span and the ReadOnlySpan overload, and a newer Roslyn in a newer feature band chose the other one. The call site is now explicit (.AsSpan()), but overload resolution across compiler versions is not something to re-discover one tag at a time, so the band is fixed and raising it is a commit. latestPatch still accepts any 9.0.3xx at or above this one, so a machine a few patches ahead builds fine.",
   "sdk": {
-    "version": "9.0.100",
-    "rollForward": "latestFeature",
+    "version": "9.0.318",
+    "rollForward": "latestPatch",
     "allowPrerelease": false
   }
 }

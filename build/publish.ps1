@@ -84,8 +84,13 @@ if ($Zip) {
     Copy-Item -LiteralPath $exe -Destination $staging
     Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $staging
 
-    $license = Join-Path $repo 'LICENSE'
-    if (Test-Path -LiteralPath $license) { Copy-Item -LiteralPath $license -Destination $staging }
+    # The changelog travels with the download so an unpacked folder found months later
+    # still says which release it is and what that release cannot do yet. The release page
+    # says the same, but nobody keeps the page.
+    foreach ($name in 'LICENSE', 'CHANGELOG.md') {
+        $extra = Join-Path $repo $name
+        if (Test-Path -LiteralPath $extra) { Copy-Item -LiteralPath $extra -Destination $staging }
+    }
 
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
     Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -CompressionLevel Optimal
