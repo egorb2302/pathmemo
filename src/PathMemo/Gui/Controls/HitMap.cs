@@ -29,6 +29,9 @@ internal enum HitKind
 
     /// <summary>A volume card on the overview.</summary>
     Volume,
+
+    /// <summary>A segment of the reclaim view's risk ceiling. <c>Index</c> is the <c>Risk</c>.</summary>
+    Risk,
 }
 
 internal readonly record struct Hit(HitKind Kind, int Index)

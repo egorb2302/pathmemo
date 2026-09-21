@@ -7,6 +7,46 @@ Release notes (`build/release-notes.ps1`), so this file is the one place a
 release is described. A build reports the tag it was cut from as
 `pathmemo --version`.
 
+## [Unreleased]
+
+The Reclaim tab, in the window.
+
+### Added
+
+- **Reclaim in the window.** The tab that said *not in the window yet* now shows the report:
+  the rules that matched the last scan, largest first, each with what deleting it gives
+  back, its share, both axes (`safe redownload`, `caution irreversible`), a note and the
+  number of places. A double-click or Enter lists the paths behind a rule; the word
+  *Reclaim* above the list leads back, and the cursor returns to the rule it left. The risk
+  ceiling is three segments — safe, caution, danger — and `t` cycles it; `y` copies the
+  paths under the cursor.
+- **It reports and does not delete.** Deleting is still `pathmemo reclaim --apply` and the
+  terminal's Reclaim screen, where the guard checks every path first, and the tab says so.
+  The headline counts only what pathmemo can delete itself; what needs another tool
+  (`git gc`) or a person (a disk image) is listed, dimmed, and named beside the total
+  rather than added to it. It ends in the id of the scan the numbers came from, and over a
+  scan that was stopped early the tab says so: what was not read is not listed, so every
+  number is a floor.
+- The rules run on a worker, so the tab opens at once and says *Applying 31 rules…* until
+  they are done: from the key to the list is under a second on a 1.2M-file snapshot,
+  loading the snapshot included.
+
+### Fixed
+
+- **After a scan, the Tree tab said "run a scan first".** A scan drops the snapshot the tab
+  was showing, and nothing loaded the new one until the tab was left and re-entered. The
+  Tree and Reclaim tabs now reload when a scan finishes under them.
+- **The scan card's Stop button sat on top of the path being read.** The card was one line
+  shorter than its contents; its height is now added up from them.
+
+### Known limitations
+
+Audit and duplicates are still the commands and the terminal screens, and the window has no
+delete dialog, which is why its Reclaim tab only reports. The rest is unchanged from 0.2.2.
+
+402 tests; ten of the new ones drive the Reclaim tab through the shell and two hold the
+scan card's lines clear of its button.
+
 ## [0.2.2] — 2026-09-22
 
 The walk scanner's numbers, corrected — and, by the same change, an unelevated scan

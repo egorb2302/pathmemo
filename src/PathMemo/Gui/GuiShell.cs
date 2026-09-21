@@ -1,3 +1,5 @@
+using PathMemo.Analysis;
+using PathMemo.Audit;
 using PathMemo.Cli.Commands;
 using PathMemo.Gui.Controls;
 using PathMemo.Gui.Render;
@@ -52,12 +54,14 @@ internal sealed class GuiShell
     private readonly HitMap _hits = new();
     private readonly OverviewView _overview = new();
     private readonly TreeView _tree = new();
+    private readonly ReclaimView _reclaim = new();
 
     private Hit _hover = Hit.None;
     private int _pointerX = -1;
     private int _pointerY = -1;
 
     private ScanJob? _job;
+    private ReclaimJob? _rules;
     private Scanning.ScanProgress? _progress;
     private bool _closeWhenIdle;
 
@@ -80,11 +84,11 @@ internal sealed class GuiShell
     /// </summary>
     private void Posted(uint message, nuint _)
     {
-        if (_job is null) return;
-
         switch (message)
         {
             case ScanJob.ProgressMessage:
+                if (_job is null) return;
+
                 _progress = _job.Take();
                 _window.Invalidate();
                 return;
@@ -92,7 +96,29 @@ internal sealed class GuiShell
             case ScanJob.FinishedMessage:
                 Finished();
                 return;
+
+            case ReclaimJob.ReadyMessage:
+                RulesReady();
+                return;
         }
+    }
+
+    /// <summary>
+    /// The rules have finished. Collected here, on the UI thread, like everything a worker
+    /// produces (README section 24.4).
+    /// </summary>
+    private void RulesReady()
+    {
+        // A job that was dropped - a scan replaced the snapshot it was reading - has nobody
+        // to deliver to, and one for another scan must not be shown against this one.
+        if (_rules is not { } job || job.ScanId != _reclaim.ScanId) return;
+        if (job.Take() is not { } index) return;
+
+        _rules = null;
+        job.Dispose();
+
+        _reclaim.Receive(index);
+        _window.Invalidate();
     }
 
     private void Finished()
@@ -133,8 +159,27 @@ internal sealed class GuiShell
         // snapshot behind. Dropping it is what makes the next open read the new one.
         Report = StatusReport.Collect();
         _tree.Forget();
+        ForgetRules();
+
+        // A view that was showing the old snapshot is showing nothing now, and "run a scan
+        // first" is the wrong thing to say a second after one finished. Both of these end in
+        // Switch, which does nothing for the view already showing. How the scan ended is the
+        // news, so it is put back over whatever reopening had to say.
+        var said = Message;
+
+        if (Active == GuiView.Tree) OpenTree();
+        else if (Active == GuiView.Reclaim) OpenReclaim();
+
+        Message = said;
 
         _window.Invalidate();
+    }
+
+    private void ForgetRules()
+    {
+        _rules?.Cancel();
+        _rules = null;
+        _reclaim.Forget();
     }
 
     /// <summary>
@@ -242,6 +287,10 @@ internal sealed class GuiShell
                 _tree.Paint(p, Theme, _hits, area, _hover);
                 break;
 
+            case GuiView.Reclaim:
+                _reclaim.Paint(p, Theme, _hits, area, _hover);
+                break;
+
             default:
                 Placeholder(p, area);
                 break;
@@ -261,7 +310,6 @@ internal sealed class GuiShell
         var (title, hint) = Active switch
         {
             GuiView.Audit => ("Audit", "Not in the window yet. `pathmemo audit` finds the invisible space."),
-            GuiView.Reclaim => ("Reclaim", "Not in the window yet. `pathmemo reclaim` lists what is worth deleting."),
             _ => ("Duplicates", "Not in the window yet. `pathmemo dupes` reads the files themselves."),
         };
 
@@ -337,6 +385,7 @@ internal sealed class GuiShell
 
             case MouseKind.Wheel:
                 if (Active == GuiView.Tree && _tree.Wheel(input.Wheel)) _window.Invalidate();
+                if (Active == GuiView.Reclaim && _reclaim.Wheel(input.Wheel)) _window.Invalidate();
                 return;
 
             case MouseKind.Down:
@@ -364,12 +413,19 @@ internal sealed class GuiShell
                 return;
 
             case HitKind.Row:
-                if (Active == GuiView.Tree && _tree.Click(what.Index, doubleClick)) _window.Invalidate();
-                else _window.Invalidate();
+                if (Active == GuiView.Tree) _tree.Click(what.Index, doubleClick);
+                else if (Active == GuiView.Reclaim) _reclaim.Click(what.Index, doubleClick);
+
+                _window.Invalidate();
                 return;
 
             case HitKind.Crumb:
                 if (Active == GuiView.Tree && _tree.Crumb(what.Index)) _window.Invalidate();
+                if (Active == GuiView.Reclaim && _reclaim.Up()) _window.Invalidate();
+                return;
+
+            case HitKind.Risk:
+                if (_reclaim.SetCeiling((Risk)what.Index)) Say(_reclaim.CeilingNote);
                 return;
 
             case HitKind.Block:
@@ -396,6 +452,21 @@ internal sealed class GuiShell
             return;
         }
 
+        // The risk ceiling and the clipboard, on the terminal screen's letters for the same
+        // reason.
+        if (key.Char is 't' or 'T' && Active == GuiView.Reclaim && _reclaim.HasReport)
+        {
+            _reclaim.CycleCeiling();
+            Say(_reclaim.CeilingNote);
+            return;
+        }
+
+        if (key.Char is 'y' or 'Y' && Active == GuiView.Reclaim)
+        {
+            CopyReclaimPaths();
+            return;
+        }
+
         switch (key.VirtualKey)
         {
             case Platform.Native.User32.VkF5:
@@ -404,6 +475,17 @@ internal sealed class GuiShell
         }
 
         if (Active == GuiView.Tree && _tree.Key(key)) _window.Invalidate();
+        if (Active == GuiView.Reclaim && _reclaim.Key(key)) _window.Invalidate();
+    }
+
+    private void CopyReclaimPaths()
+    {
+        var paths = _reclaim.SelectedPaths;
+        if (paths.Count == 0) return;
+
+        Say(Clipboard.TrySetText(string.Join(Environment.NewLine, paths), out var error)
+            ? $"{paths.Count:N0} path{(paths.Count == 1 ? "" : "s")} copied."
+            : $"Clipboard: {error}");
     }
 
     /// <summary>
@@ -420,8 +502,7 @@ internal sealed class GuiShell
     {
         if (!_tree.HasSnapshot)
         {
-            if (!SnapshotLoader.TryLoad(null, SnapshotParts.Tree | SnapshotParts.Volumes,
-                    out var snapshot, out var id))
+            if (!TryLoadSnapshot(preferredLetter))
             {
                 // Switch, not Show: Show would come straight back here, because what sends it
                 // here is the absence of a snapshot and that is exactly what has just failed
@@ -432,8 +513,6 @@ internal sealed class GuiShell
                 Say("No snapshot to browse yet. Press Scan.");
                 return;
             }
-
-            _tree.Load(snapshot, id, preferredLetter ?? Report.PrimaryLetter);
         }
         else if (preferredLetter is { Length: > 0 })
         {
@@ -441,6 +520,56 @@ internal sealed class GuiShell
         }
 
         Switch(GuiView.Tree);
+    }
+
+    /// <summary>
+    /// Loads the newest snapshot, once, for every view that reads one.
+    /// </summary>
+    /// <remarks>
+    /// The tree view owns it and the reclaim view borrows its tree: one 128 MB snapshot in
+    /// memory rather than two (README section 24.7), and one scan id on screen rather than a
+    /// tree from one scan beside recommendations from another.
+    /// </remarks>
+    private bool TryLoadSnapshot(string? preferredLetter)
+    {
+        if (_tree.HasSnapshot) return true;
+
+        if (!SnapshotLoader.TryLoad(null, SnapshotParts.Tree | SnapshotParts.Volumes,
+                out var snapshot, out var id))
+            return false;
+
+        _tree.Load(snapshot, id, preferredLetter ?? Report.PrimaryLetter);
+        return true;
+    }
+
+    /// <summary>
+    /// Opens the reclaim view, starting the rules over the snapshot if they have not run.
+    /// </summary>
+    /// <remarks>
+    /// The same shape as <see cref="OpenTree"/>, for the same reason: every path through it
+    /// ends in <see cref="Switch"/>, including the one where there is nothing to load.
+    /// </remarks>
+    private void OpenReclaim()
+    {
+        if (!TryLoadSnapshot(null))
+        {
+            Switch(GuiView.Reclaim);
+            Say("No snapshot to look at yet. Press Scan.");
+            return;
+        }
+
+        if (_reclaim.ScanId != _tree.ScanId)
+        {
+            _rules?.Cancel();
+
+            var partial = (_tree.Snapshot!.Flags & Scanning.ScanFlags.Partial) != 0;
+            _reclaim.Begin(_tree.ScanId, RuleSet.Current().Count, partial);
+
+            _rules = new ReclaimJob(_window, _tree.Tree, _tree.ScanId);
+            _rules.Start();
+        }
+
+        Switch(GuiView.Reclaim);
     }
 
     /// <summary>
@@ -458,6 +587,12 @@ internal sealed class GuiShell
         if (view == GuiView.Tree && !_tree.HasSnapshot && Active != GuiView.Tree)
         {
             OpenTree();
+            return;
+        }
+
+        if (view == GuiView.Reclaim && !_reclaim.Loaded && Active != GuiView.Reclaim)
+        {
+            OpenReclaim();
             return;
         }
 

@@ -41,7 +41,42 @@ internal sealed class RecordingWindow : IShellWindow
 
     public void Invalidate() => Invalidations++;
 
-    public void Post(uint message, nuint argument = 0) => Posts.Add((message, argument));
+    /// <remarks>Called from worker threads, which is the whole point of a post - hence the lock.</remarks>
+    public void Post(uint message, nuint argument = 0)
+    {
+        lock (Posts) Posts.Add((message, argument));
+    }
+
+    /// <summary>
+    /// Waits for a worker to post <paramref name="message"/> and then delivers everything
+    /// posted so far, in order, on the calling thread - one turn of the message loop.
+    /// </summary>
+    /// <returns>False when the message did not arrive within the budget.</returns>
+    internal bool Pump(uint message, int budgetMs = 10_000)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        while (true)
+        {
+            (uint Message, nuint Argument)[] pending;
+
+            lock (Posts)
+            {
+                pending = Posts.Exists(p => p.Message == message) ? [.. Posts] : [];
+                if (pending.Length > 0) Posts.Clear();
+            }
+
+            if (pending.Length > 0)
+            {
+                foreach (var post in pending) OnPosted?.Invoke(post.Message, post.Argument);
+                return true;
+            }
+
+            if (clock.ElapsedMilliseconds > budgetMs) return false;
+
+            Thread.Sleep(5);
+        }
+    }
 
     public void Close() => Closed = true;
 
@@ -61,6 +96,13 @@ internal sealed class RecordingWindow : IShellWindow
     internal void Click(int x, int y) =>
         OnMouse?.Invoke(new MouseInput(MouseKind.Down, x, y, 0, false, false));
 
+    internal void DoubleClick(int x, int y) =>
+        OnMouse?.Invoke(new MouseInput(MouseKind.DoubleClick, x, y, 0, false, false));
+
     internal void Type(char character) =>
         OnKey?.Invoke(new KeyInput(0, character, false, false));
+
+    /// <summary>A key that is not a character: an arrow, Enter, Backspace.</summary>
+    internal void Press(int virtualKey) =>
+        OnKey?.Invoke(new KeyInput(virtualKey, '\0', false, false));
 }

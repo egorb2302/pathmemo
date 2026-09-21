@@ -35,7 +35,16 @@ internal static class ScanView
         p.Fill(area, theme.Background.Mix(theme.Dark ? Colour.Rgb(0x000000) : Colour.Rgb(0xFFFFFF), 0.55));
 
         var width = Math.Min(area.Width - p.Scale(80), p.Scale(560));
-        var height = p.LineHeight * 6 + p.Scale(92);
+
+        // Added up from what is drawn below rather than picked: the padding, the title, the
+        // roots, four facts, the bar, the path and the button's row. As a constant it was one
+        // line short, and the path ran underneath the Stop button - the same mistake as the
+        // overview's card height, which was right for one machine's fonts.
+        var height = p.Scale(18) + p.Height(FontRole.Title) + p.Scale(2) + p.LineHeight + p.Scale(12)
+                     + p.LineHeight * 4 + p.Scale(8)
+                     + p.Scale(8) + p.Scale(6)
+                     + p.Height(FontRole.Small) + p.Scale(6)
+                     + p.LineHeight + p.Scale(26);
 
         var card = new Rect(
             area.X + (area.Width - width) / 2,

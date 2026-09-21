@@ -463,4 +463,40 @@ public class GuiTests
 
         return view;
     }
+
+    // ------------------------------------------------------------------ The scan card
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_scan_card_keeps_the_path_clear_of_its_button(bool withFraction)
+    {
+        // The card's height was a constant one line short of what is drawn into it, so the
+        // directory being read ran underneath Stop. Seen in a screenshot, not in a test,
+        // because no test looked: every line on the card has to end above the button's row,
+        // with the bar the MFT scanner adds as well as without it.
+        var painter = new RecordingPainter();
+        var hits = new HitMap();
+        var job = new PathMemo.Gui.Work.ScanJob(new RecordingWindow(), ["C:", "D:"]);
+
+        var progress = new PathMemo.Scanning.ScanProgress
+        {
+            Entries = 182_338,
+            Bytes = 46L << 30,
+            Errors = 92,
+            Elapsed = TimeSpan.FromSeconds(4),
+            CurrentPath = @"C:\Windows\WinSxS\wow64_microsoft-windows-accountscontrolexp",
+            Fraction = withFraction ? 0.4 : null,
+        };
+
+        ScanView.Paint(painter, Theme.Dusk, hits, new Rect(0, 0, 1180, 680), job, progress, Hit.None);
+
+        var stop = painter.Texts.Single(t => t.Text == "Stop").Area;
+        var path = painter.Texts.Single(t => t.Text.Contains("WinSxS", StringComparison.Ordinal)).Area;
+
+        Assert.True(path.Bottom <= stop.Y, $"the path ends at {path.Bottom}, the button starts at {stop.Y}");
+
+        foreach (var run in painter.Texts)
+            if (run.Text != "Stop") Assert.True(run.Area.Intersect(stop).IsEmpty, $"'{run.Text}' is under the button");
+    }
 }
