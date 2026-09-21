@@ -77,6 +77,7 @@ internal sealed class DirectoryLister
     private readonly FileSystemEnumerable<RawEntry>.FindTransform _transform;
     private readonly bool _resolveAllocatedSize;
     private List<RawEntry>? _into;
+    private long _clusterBytes;
 
     /// <summary>Multi-link files seen by the last <see cref="TryList"/>, in entry order.</summary>
     internal List<HardlinkRef> PendingLinks { get; } = new(8);
@@ -99,12 +100,17 @@ internal sealed class DirectoryLister
     /// Reads one directory. Returns false with <paramref name="error"/> set if the
     /// directory could not be enumerated at all.
     /// </summary>
-    internal bool TryList(string directory, List<RawEntry> into, out ScanError? error)
+    /// <param name="clusterBytes">
+    /// The volume's cluster size, which is what an ordinary file's allocation is rounded
+    /// up to; 0 leaves sizes unrounded, for a volume whose cluster size is unknown.
+    /// </param>
+    internal bool TryList(string directory, List<RawEntry> into, long clusterBytes, out ScanError? error)
     {
         error = null;
         into.Clear();
         PendingLinks.Clear();
         _into = into;
+        _clusterBytes = clusterBytes;
 
         try
         {
@@ -150,7 +156,19 @@ internal sealed class DirectoryLister
 
         if (_resolveAllocatedSize && !isDirectory && !untracked && logical > 0)
         {
-            allocated = QueryAllocatedSize(entry.Directory, entry.FileName, logical);
+            // The kernel's buffer carries the logical size but not the allocation, and
+            // asking for it costs a syscall per file - which, for an ordinary file, answers
+            // with the logical size again: GetCompressedFileSize only knows a different
+            // number for a compressed or sparse file. So those two ask, and everything else
+            // rounds up to the cluster, the way the audit already measures a directory
+            // (README section 6.4). Until the two were told apart, every file paid the
+            // syscall and the walk still reported logical as allocated, understating a
+            // volume by about half a cluster per file; the MFT scanner, which reads the
+            // real run lists, disagreed with it by exactly that (README section 22.5).
+            var thin = (attributes & (FileAttributes.Compressed | FileAttributes.SparseFile)) != 0;
+            allocated = thin
+                ? QueryAllocatedSize(entry.Directory, entry.FileName, logical)
+                : RoundUpToCluster(logical, _clusterBytes);
 
             // A file id needs a handle, which is too dear per file but cheap for the few
             // percent of files above 1 MB - and those are the ones whose double counting
@@ -283,14 +301,16 @@ internal sealed class DirectoryLister
     }
 
     /// <summary>
-    /// Physical bytes: cluster-rounded, and lower than logical for sparse or
-    /// NTFS-compressed files. This is the number that adds up to "used space"
+    /// What <c>GetCompressedFileSize</c> says the file occupies: the compressed or
+    /// sparse allocation for a file flagged as either, and for any other file simply its
+    /// logical size - the API does not round to the cluster, so the caller has to
+    /// (<see cref="RoundUpToCluster"/>). This is the number that adds up to "used space"
     /// (README section 3.1).
     /// </summary>
     /// <remarks>
-    /// Costs one syscall per file, which is the main reason the MFT scanner - where the
-    /// same value comes free - is the preferred path. The path is composed into a stack
-    /// buffer so that a million calls allocate nothing.
+    /// Costs one syscall per file, which is why it is asked only for the files whose
+    /// answer it can change. The path is composed into a stack buffer so that a million
+    /// calls allocate nothing.
     /// </remarks>
     internal static unsafe long QueryAllocatedSize(
         ReadOnlySpan<char> directory, ReadOnlySpan<char> name, long fallback)
@@ -343,6 +363,13 @@ internal sealed class DirectoryLister
             if (rented is not null) System.Buffers.ArrayPool<char>.Shared.Return(rented);
         }
     }
+
+    /// <summary>
+    /// The clusters a stream of <paramref name="bytes"/> occupies, as bytes; unchanged
+    /// when the cluster size is unknown.
+    /// </summary>
+    internal static long RoundUpToCluster(long bytes, long cluster) =>
+        cluster <= 0 ? bytes : (bytes + cluster - 1) / cluster * cluster;
 
     private static ScanError Classify(string path, Exception ex)
     {

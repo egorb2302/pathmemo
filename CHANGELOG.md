@@ -7,6 +7,45 @@ Release notes (`build/release-notes.ps1`), so this file is the one place a
 release is described. A build reports the tag it was cut from as
 `pathmemo --version`.
 
+## [0.2.2] — 2026-09-22
+
+The walk scanner's numbers, corrected — and, by the same change, an unelevated scan
+several times faster.
+
+### Fixed
+
+- **The walk scanner under-reported used space.** For every ordinary file it reported the
+  logical size as the allocated one: `GetCompressedFileSize`, which it asked once per file,
+  only knows a different number for compressed and sparse files and answers with the plain
+  length for everything else. Over the 1.2M files of this machine's C: that was 3 GB missing
+  from *scanned* and booked to *unaccounted*, which fell from 17.9 GB (8.7%) to 14.8 GB
+  (7.2%) — the rest is what the accuracy limits say it is. The MFT scanner, which reads the
+  run lists, was right all along; the test that compares the two had never run (below).
+- **An unelevated scan is 3–4× faster.** The per-file syscall above is gone for ordinary
+  files, which now round up to the cluster the way the audit already measured directories.
+  A walk of the same C: — 1.21M files, 361k directories — takes 13.5 s where it took 41 s
+  (the README's own figure) to 61 s (a cold run the same day) before. See [README](README.md)
+  §4.4 and §22.5.
+
+### Tests
+
+- `Mft_scanner_agrees_with_the_walk_when_elevated` has run and passed, for the first time.
+  Since the suite began declaring itself unelevated it had returned on its first line even
+  as an administrator, because it asked the declaration rather than the token; it now asks
+  Windows directly, and on a CI runner — an administrator — it runs too.
+- Two new tests pin the walk's allocated sizes against real files, unelevated, on every run:
+  ordinary files round to the cluster, a compressed file is asked.
+
+### Known limitations of this release
+
+Unchanged from 0.2.0: the window shows the volumes and the tree, and audit, reclaim and
+duplicates are the commands and the terminal screens for now; the window is unverified on
+arm64, above 100% scaling and across monitors of different scale; unelevated, some paths
+are unreadable, hard-link deduplication covers only files of 1 MB and over, and alternate
+data streams are not counted — elevation removes all three.
+
+390 tests, passing both as an ordinary user and as an administrator.
+
 ## [0.2.1] — 2026-09-19
 
 A fix for a crash that made the window unusable on exactly the machine it was most likely

@@ -16,8 +16,8 @@ internal sealed class WalkScanner : IScanner
 
     public (bool Can, string Reason) CanScan(VolumeInfo volume) => (true, "ready");
 
-    /// <summary>One directory awaiting enumeration.</summary>
-    private readonly record struct DirTask(int DirId, string Path);
+    /// <summary>One directory awaiting enumeration, with its volume's cluster size.</summary>
+    private readonly record struct DirTask(int DirId, string Path, long ClusterBytes);
 
     public async Task<ScanResult> ScanAsync(
         ScanRequest request,
@@ -40,7 +40,7 @@ internal sealed class WalkScanner : IScanner
             var id = dirs.Add(root);
             results.Add(null);
             rootDirIds[v] = id;
-            queue.Enqueue(new DirTask(id, root));
+            queue.Enqueue(new DirTask(id, root, volumes[v].ClusterBytes));
         }
 
         var parallelism = ResolveParallelism(request, volumes);
@@ -120,7 +120,7 @@ internal sealed class WalkScanner : IScanner
 
             var result = new WalkDirResult { BlobId = lister.BlobId };
 
-            if (!lister.TryList(task.Path, buffer, out var error))
+            if (!lister.TryList(task.Path, buffer, task.ClusterBytes, out var error))
             {
                 result.Failed = true;
                 results[task.DirId] = result;
@@ -155,7 +155,7 @@ internal sealed class WalkScanner : IScanner
                     var childId = dirs.Add(childPath);
                     results.Add(null);
                     subdirIds[i] = childId;
-                    queue.Enqueue(new DirTask(childId, childPath));
+                    queue.Enqueue(new DirTask(childId, childPath, task.ClusterBytes));
                 }
                 else
                 {

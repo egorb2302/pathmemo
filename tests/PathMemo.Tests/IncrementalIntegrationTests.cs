@@ -162,7 +162,7 @@ public sealed class IncrementalIntegrationTests : IDisposable
         var errors = new List<ScanError>();
 
         var set = changed.Select(IncrementalTree.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var tree = IncrementalTree.Rebuild(baseline, set, UsnIncrementalScanner.Reader(lister), errors, default);
+        var tree = IncrementalTree.Rebuild(baseline, set, UsnIncrementalScanner.Reader(lister, VolumeInfo.Enumerate()), errors, default);
 
         Assert.Empty(errors);
         return tree;

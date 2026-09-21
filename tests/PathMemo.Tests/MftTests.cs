@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Text;
 using PathMemo.Platform;
 using PathMemo.Scanning;
@@ -611,11 +612,48 @@ public sealed class HardlinkTests : IDisposable
     /// Only runs elevated - the $MFT cannot be opened otherwise - and then compares the
     /// MFT scanner against the walk on the same directory tree.
     /// </summary>
+    /// <remarks>
+    /// The suite declares itself unelevated (<see cref="TestStore.Init"/>), which is the
+    /// right answer for every other test and, for this one, meant returning on the first
+    /// line whoever ran it: the declaration hid the token. So this test asks Windows
+    /// directly, and only then claims for its own duration what it has just verified. The
+    /// finally hands the declared answer back before the next test, which is safe because
+    /// the suite runs sequentially (TestParallelism.cs).
+    /// </remarks>
     [Fact]
     public async Task Mft_scanner_agrees_with_the_walk_when_elevated()
     {
+        if (!TokenIsElevated()) return;
+
+        Elevation.Assume(true);
+        try
+        {
+            await CompareMftWithWalk();
+        }
+        finally
+        {
+            Elevation.Assume(false);
+        }
+    }
+
+    private static bool TokenIsElevated()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    private async Task CompareMftWithWalk()
+    {
         var volume = VolumeFor(_root);
-        if (!volume.MftScanAvailability.Available) return;
+        var (available, reason) = volume.MftScanAvailability;
+        if (!available)
+        {
+            // The token has been verified, so an unavailable scanner is the volume's doing -
+            // not NTFS, or not a fixed disk - which is an environment to skip, not a
+            // scanner to blame. Being told it is the rights, after that, would be a bug.
+            Assert.DoesNotContain("administrator", reason, StringComparison.OrdinalIgnoreCase);
+            return;
+        }
 
         File.WriteAllBytes(Path.Combine(_root, "one.bin"), new byte[300_000]);
         Directory.CreateDirectory(Path.Combine(_root, "sub", "deeper"));
@@ -636,7 +674,10 @@ public sealed class HardlinkTests : IDisposable
         // On disk: the walk rounds the resident file up to a cluster, the MFT knows it
         // occupies none; everything else must agree exactly.
         var cluster = volume.ClusterBytes;
-        Assert.InRange(walk.AllocatedBytes - mft.AllocatedBytes, 0, cluster);
+        var slack = walk.AllocatedBytes - mft.AllocatedBytes;
+        Assert.True(slack >= 0 && slack <= cluster,
+            $"allocated: walk {walk.AllocatedBytes}, mft {mft.AllocatedBytes}, walk - mft = {slack}, " +
+            $"expected within [0, {cluster}]\n" + AllocationTable(walk.Tree, mft.Tree));
 
         for (var i = 0; i < walk.Tree.Count; i++)
         {
@@ -650,6 +691,23 @@ public sealed class HardlinkTests : IDisposable
         var alias = Enumerable.Range(0, mft.Tree.Count).Where(i => (mft.Tree.Flags[i] & NodeFlags.HardlinkAlias) != 0).ToArray();
         Assert.Single(alias);
         Assert.Equal("two.bin", mft.Tree.Name(alias[0]));      // the deeper name is the alias
+    }
+
+    /// <summary>
+    /// Every node's allocation from both scanners, for the failure message: a bare
+    /// difference of a few thousand bytes says nothing about which file it came from.
+    /// </summary>
+    private static string AllocationTable(NodeStore walk, NodeStore mft)
+    {
+        var sb = new StringBuilder();
+        for (var i = 0; i < walk.Count; i++)
+        {
+            var path = walk.GetPath(i);
+            var node = Analysis.TreeQuery.Find(mft, path);
+            var theirs = node == NodeStore.NoNode ? "(missing)" : mft.Allocated[node].ToString();
+            sb.Append(path).Append(": walk ").Append(walk.Allocated[i]).Append(", mft ").Append(theirs).Append('\n');
+        }
+        return sb.ToString();
     }
 
     private static bool TryHardLink(string link, string target)

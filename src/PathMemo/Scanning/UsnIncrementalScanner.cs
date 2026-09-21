@@ -141,7 +141,7 @@ internal sealed class UsnIncrementalScanner(SnapshotContents baseline) : IScanne
         }
 
         var lister = new DirectoryLister(new NameBlobBuilder(1 << 12), 0, resolveAllocatedSize: true);
-        var tree = IncrementalTree.Rebuild(_base.Tree, changed, Reader(lister), errors, ct);
+        var tree = IncrementalTree.Rebuild(_base.Tree, changed, Reader(lister, volumes), errors, ct);
 
         stopwatch.Stop();
 
@@ -222,7 +222,7 @@ internal sealed class UsnIncrementalScanner(SnapshotContents baseline) : IScanne
     /// link counts actually come from, and a fake over it would prove nothing about them
     /// (README section 22.2).
     /// </remarks>
-    internal static LiveDirectoryReader Reader(DirectoryLister lister)
+    internal static LiveDirectoryReader Reader(DirectoryLister lister, IReadOnlyList<VolumeInfo> volumes)
     {
         var raw = new List<RawEntry>(256);
 
@@ -230,7 +230,18 @@ internal sealed class UsnIncrementalScanner(SnapshotContents baseline) : IScanne
         {
             into.Clear();
 
-            if (!lister.TryList(path, raw, out error)) return false;
+            // The same rounding the full scan applied, or a rescan would replace a
+            // directory's cluster-rounded sizes with logical ones and the tree would
+            // shrink by the difference every time something in it changed.
+            long cluster = 0;
+            foreach (var volume in volumes)
+            {
+                if (!path.StartsWith(volume.Root, StringComparison.OrdinalIgnoreCase)) continue;
+                cluster = volume.ClusterBytes;
+                break;
+            }
+
+            if (!lister.TryList(path, raw, cluster, out error)) return false;
 
             for (var i = 0; i < raw.Count; i++)
             {
