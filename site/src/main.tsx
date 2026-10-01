@@ -32,7 +32,13 @@ function paint() {
 
 const ticker = window.setInterval(paint, 40)
 
+let finished = false
+
+window.addEventListener('app:ready', () => lenis?.start())
+
 function finish() {
+  if (finished) return
+  finished = true
   target = 100
   const wait = Math.max(0, MIN_MS - (performance.now() - started))
   window.setTimeout(() => {
@@ -44,9 +50,10 @@ function finish() {
     } catch {
       /* storage blocked */
     }
-    document.documentElement.classList.add('is-ready')
-    window.dispatchEvent(new Event('app:ready'))
-    lenis?.start()
+    if (!document.documentElement.classList.contains('is-ready')) {
+      document.documentElement.classList.add('is-ready')
+      window.dispatchEvent(new Event('app:ready'))
+    }
   }, wait)
 }
 

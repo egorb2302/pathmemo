@@ -8,6 +8,7 @@ type Rect = HierarchyRectangularNode<DiskNode>
 type Box = { x: number; y: number; w: number; h: number }
 
 const GAP = 2
+const MAP_MIN = 200
 const STACKED = '(max-width: 1023px)'
 const SHADES = ['#161c27', '#1a2130', '#1e2636', '#222b3c', '#262f42']
 
@@ -78,8 +79,8 @@ function plan(focus: string[], w: number, h: number, cellH: number, stacked: boo
   const atRoot = focus.length === 1
 
   if (stacked) {
-    const ch = Math.min(cellH, h - 200)
-    const main = { x: 0, y: 0, w, h: h - ch - GAP }
+    const ch = cellH
+    const main = { x: 0, y: 0, w, h: Math.max(MAP_MIN, h - ch - GAP) }
     const cell = { x: 0, y: h - ch, w, h: ch }
     return { main, side: null, cell, mainNodes: layout(data, main, narrow), sideNodes: [] }
   }
@@ -137,6 +138,7 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
   const busy = useRef(false)
   const keyboard = useRef(false)
   const pinned = useRef<string | null>(null)
+  const refocus = useRef(false)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [cellH, setCellH] = useState(300)
   const [focus, setFocus] = useState<string[]>(['C:'])
@@ -171,6 +173,20 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
     const h = Math.ceil(inner.scrollHeight)
     if (Math.abs(h - cellH) > 1) setCellH(h)
   })
+
+  useEffect(() => {
+    const inner = cellRef.current?.firstElementChild as HTMLElement | null
+    if (!inner || !stacked) return
+    const ro = new ResizeObserver(() => setCellH(Math.ceil(inner.scrollHeight)))
+    ro.observe(inner)
+    return () => ro.disconnect()
+  }, [stacked, size.w])
+
+  useLayoutEffect(() => {
+    const host = boxRef.current?.parentElement
+    if (!host) return
+    host.style.minHeight = stacked ? `${MAP_MIN + GAP + cellH}px` : ''
+  }, [stacked, cellH])
 
   const p = useMemo(() => (size.w && size.h ? plan(focus, size.w, size.h, cellH, stacked) : null), [focus, size, cellH, stacked])
 
@@ -293,6 +309,11 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
     [focus, p],
   )
 
+  const unpin = useCallback(() => {
+    pinned.current = null
+    setHover(null)
+  }, [])
+
   const back = useCallback(() => {
     if (focus.length > 1) go(focus.slice(0, -1))
   }, [focus, go])
@@ -308,11 +329,20 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') back()
+      if (e.key !== 'Escape') return
+      if (pinned.current) unpin()
+      else back()
+    }
+    const onDown = (e: PointerEvent) => {
+      if (pinned.current && !(e.target as Element).closest?.('[data-block]')) unpin()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [back])
+    document.addEventListener('pointerdown', onDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onDown)
+    }
+  }, [back, unpin])
 
   const placeTip = (x: number, y: number) => {
     const tip = tipRef.current
@@ -337,6 +367,7 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
 
   const onLeafClick = (l: Rect, e: React.MouseEvent) => {
     const key = fullPath(l)
+    const g = l.parent && l.parent.depth > 0 ? l.parent : null
     const touch = (e.nativeEvent as PointerEvent).pointerType === 'touch' || window.matchMedia('(pointer: coarse)').matches
     if (touch && pinned.current !== key) {
       pinned.current = key
@@ -344,8 +375,12 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
       tipAtBlock(l)
       return
     }
-    const g = l.parent && l.parent.depth > 0 ? l.parent : null
-    if (g) go(groupPath(g), g)
+    if (!g) {
+      if (pinned.current) unpin()
+      return
+    }
+    refocus.current = e.detail === 0 || keyboard.current
+    go(groupPath(g), g)
   }
 
   const onKeyNav = (e: React.KeyboardEvent) => {
@@ -365,15 +400,33 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
 
   useEffect(() => {
     setActive(0)
-    keyboard.current = false
+    if (!refocus.current) {
+      keyboard.current = false
+      return
+    }
+    refocus.current = false
+    keyboard.current = true
+    requestAnimationFrame(() => layerRef.current?.querySelector<HTMLElement>('[data-block]')?.focus())
   }, [focus])
+
+  useEffect(() => {
+    setActive((a) => (a < leaves.length ? a : 0))
+  }, [leaves.length])
 
   const hovered = hover?.data
   const match = hovered?.match
   const zoomed = focus.length > 1
   const crumbs = zoomed && (
     <nav className="map-crumbs" aria-label="Folder path">
-      <button type="button" className="crumb-back" onClick={back} aria-label="Back out one level">
+      <button
+        type="button"
+        className="crumb-back"
+        onClick={(e) => {
+          refocus.current = e.detail === 0
+          back()
+        }}
+        aria-label="Back out one level"
+      >
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" strokeWidth="1.6" />
         </svg>
@@ -443,7 +496,7 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
               className={`b${m ? (m.risk === 'safe' ? ' is-safe' : ' is-caution') : ''}${filled ? ' is-filled' : ''}${opens ? '' : ' is-flat'}`}
               style={{ left: l.x0, top: l.y0, width: w, height: h, background: shadeOf(l.data.name, l.depth) }}
               onPointerEnter={(e) => {
-                if (e.pointerType === 'mouse' && !pinned.current) setHover(l)
+                if (e.pointerType === 'mouse' && !pinned.current && !busy.current) setHover(l)
               }}
               onFocus={(e) => {
                 setActive(i)
@@ -475,7 +528,11 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
         <div
           ref={cellRef}
           className="map-cell"
-          style={{ left: p.cell.x, top: p.cell.y, width: p.cell.w, height: stacked ? 'auto' : p.cell.h }}
+          style={
+            stacked
+              ? { left: 0, bottom: 0, width: p.cell.w, height: 'auto' }
+              : { left: p.cell.x, top: p.cell.y, width: p.cell.w, height: p.cell.h }
+          }
         >
           {cell}
         </div>

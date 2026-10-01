@@ -1426,9 +1426,16 @@ p {
   }
 }
 
+@media (max-width: 1023px) {
+  .hero {
+    height: auto;
+    min-height: 100svh;
+  }
+}
+
 @media (max-width: 760px) {
   .hero {
-    min-height: 560px;
+    min-height: max(560px, 100svh);
   }
   .bar {
     position: relative;

@@ -55,7 +55,12 @@
       </p>
     </noscript>
     <script>
-      setTimeout(function () { document.documentElement.classList.add('is-ready') }, 15000)
+      setTimeout(function () {
+        var html = document.documentElement
+        if (html.classList.contains('is-ready')) return
+        html.classList.add('is-ready')
+        window.dispatchEvent(new Event('app:ready'))
+      }, 15500)
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
