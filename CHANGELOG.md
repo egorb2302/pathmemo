@@ -7,9 +7,9 @@ Release notes (`build/release-notes.ps1`), so this file is the one place a
 release is described. A build reports the tag it was cut from as
 `pathmemo --version`.
 
-## [Unreleased]
+## [0.2.3] — 2026-10-01
 
-The Reclaim tab, in the window.
+The Reclaim tab, in the window, and five rules for a JavaScript and Solana machine.
 
 ### Added
 
