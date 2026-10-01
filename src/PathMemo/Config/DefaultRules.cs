@@ -19,7 +19,8 @@ namespace PathMemo.Config;
 /// undeletable - they are audit findings with a <c>powercfg</c> command. <c>WinSxS</c>
 /// breaks the system when touched by hand; <c>DISM</c> only. <c>C:\Windows\Installer</c>
 /// breaks uninstall and updates. <c>System Volume Information</c> is the VSS API's.
-/// <c>.git\objects</c> is the repository. A rule that matched any of them would be a rule
+/// <c>.git\objects</c> is the repository. A Rust <c>target\deploy</c> holds Solana
+/// program keypairs. A rule that matched any of them would be a rule
 /// that eventually deletes them.
 /// </para>
 /// </remarks>
@@ -65,6 +66,35 @@ internal static class DefaultRules
             Recoverability = Recoverability.Redownload,
             What = "yarn's package cache",
             Command = "yarn cache clean",
+        },
+        new ReclaimRule
+        {
+            Id = "dev.bun_cache",
+            Patterns = [@"~\.bun\install\cache"],
+            Risk = Risk.Safe,
+            Recoverability = Recoverability.Redownload,
+            What = "bun's global package cache",
+            Command = "bun pm cache rm",
+        },
+        new ReclaimRule
+        {
+            // The sibling is what tells a Next.js build from any other directory that
+            // happens to start with a dot and end in "next".
+            Id = "dev.next",
+            Patterns = [@"**\.next"],
+            Risk = Risk.Safe,
+            Recoverability = Recoverability.Rebuild,
+            What = "Next.js build output and its cache",
+            RequiresSibling = "package.json",
+        },
+        new ReclaimRule
+        {
+            Id = "dev.playwright_browsers",
+            Patterns = [@"%LOCALAPPDATA%\ms-playwright"],
+            Risk = Risk.Safe,
+            Recoverability = Recoverability.Redownload,
+            What = "browsers downloaded for Playwright",
+            Command = "npx playwright uninstall --all",
         },
         new ReclaimRule
         {
@@ -130,12 +160,38 @@ internal static class DefaultRules
         },
         new ReclaimRule
         {
+            // Solana's SBF output is named, never the whole target: target\deploy holds the
+            // program keypairs, which are the addresses the code declares.
             Id = "dev.cargo",
-            Patterns = [@"~\.cargo\registry", @"**\target\debug", @"**\target\release"],
+            Patterns =
+            [
+                @"~\.cargo\registry", @"**\target\debug", @"**\target\release",
+                @"**\target\sbpf-solana-solana", @"**\target\sbf-solana-solana",
+            ],
             Risk = Risk.Safe,
             Recoverability = Recoverability.Rebuild,
             What = "Rust registry and build output",
             Command = "cargo clean",
+        },
+        new ReclaimRule
+        {
+            // Reported, never deleted: rustup keeps its own record of what is installed, and
+            // a toolchain removed behind its back leaves that record lying.
+            Id = "dev.rustup_toolchains",
+            Patterns = [@"~\.rustup\toolchains"],
+            Risk = Risk.Caution,
+            Recoverability = Recoverability.Redownload,
+            What = "installed Rust toolchains",
+            Action = ReclaimAction.Command,
+            Command = "rustup toolchain uninstall <old>",
+        },
+        new ReclaimRule
+        {
+            Id = "dev.solana_tools",
+            Patterns = [@"~\.cache\solana"],
+            Risk = Risk.Safe,
+            Recoverability = Recoverability.Redownload,
+            What = "Solana platform tools, a copy per version",
         },
         new ReclaimRule
         {

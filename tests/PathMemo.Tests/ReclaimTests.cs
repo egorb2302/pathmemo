@@ -156,6 +156,81 @@ public sealed class ReclaimTests
     }
 
     [Fact]
+    public void A_next_build_needs_its_package_beside_it()
+    {
+        var tree = new TestTree()
+            .File(@"C:\work\site\package.json", 900)
+            .File(@"C:\work\site\.next\cache\webpack\0.pack", 64 << 20)
+            .File(@"C:\notes\.next\todo.md", 4 << 20)               // no package.json beside it
+            .Build();
+
+        var report = Plan(tree, [DefaultRules.ById("dev.next")!]);
+        var group = Group(report, "dev.next");
+
+        Assert.NotNull(group);
+        Assert.Single(group.Matches);
+        Assert.Equal(@"C:\work\site\.next", group.Matches[0].Path);
+    }
+
+    [Fact]
+    public void Solana_build_output_goes_and_the_program_keypairs_stay()
+    {
+        var tree = new TestTree()
+            .File(@"C:\work\prog\target\sbpf-solana-solana\release\prog.so", 40 << 20)
+            .File(@"C:\work\old\target\sbf-solana-solana\release\old.so", 30 << 20)
+            .File(@"C:\work\prog\target\deploy\prog-keypair.json", 230)
+            .File(@"C:\work\prog\target\deploy\prog.so", 1 << 20)
+            .Build();
+
+        var report = Plan(tree, [DefaultRules.ById("dev.cargo")!]);
+        var group = Group(report, "dev.cargo");
+
+        Assert.NotNull(group);
+        Assert.Equal(
+            new[] { @"C:\work\old\target\sbf-solana-solana", @"C:\work\prog\target\sbpf-solana-solana" },
+            group.Matches.Select(m => m.Path).Order(StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Machine_wide_tool_caches_are_found_where_the_tools_keep_them()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        var tree = new TestTree()
+            .File(home + @"\.bun\install\cache\react@19.0.0\index.js", 8 << 20)
+            .File(home + @"\.cache\solana\v1.54\platform-tools\llvm\bin\clang.exe", 64 << 20)
+            .File(local + @"\ms-playwright\chromium-1200\chrome-win\chrome.exe", 32 << 20)
+            .Build();
+
+        var report = Plan(tree,
+        [
+            DefaultRules.ById("dev.bun_cache")!,
+            DefaultRules.ById("dev.solana_tools")!,
+            DefaultRules.ById("dev.playwright_browsers")!,
+        ]);
+
+        Assert.Equal(home + @"\.bun\install\cache", Group(report, "dev.bun_cache")?.Matches[0].Path);
+        Assert.Equal(home + @"\.cache\solana", Group(report, "dev.solana_tools")?.Matches[0].Path);
+        Assert.Equal(local + @"\ms-playwright", Group(report, "dev.playwright_browsers")?.Matches[0].Path);
+    }
+
+    [Fact]
+    public void Rust_toolchains_are_reported_and_left_to_rustup()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var tree = new TestTree()
+            .File(home + @"\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe", 900 << 20)
+            .Build();
+
+        var report = Plan(tree, [DefaultRules.ById("dev.rustup_toolchains")!]);
+
+        Assert.Equal(ReclaimAction.Command, report.Groups[0].Rule.Action);
+        Assert.False(report.Groups[0].Matches[0].Offered);
+        Assert.Empty(ReclaimPlanner.TargetsOf(report.Groups));
+    }
+
+    [Fact]
     public void An_age_condition_leaves_recent_files_alone()
     {
         var old = SnapshotTime.FromDateTime(DateTime.UtcNow.AddDays(-400));
@@ -477,6 +552,7 @@ public sealed class ReclaimTests
             @"C:\hiberfil.sys", @"C:\pagefile.sys", @"C:\swapfile.sys",
             @"C:\Windows\WinSxS", @"C:\Windows\Installer",
             @"C:\System Volume Information", @"C:\work\repo\.git\objects",
+            @"C:\work\prog\target\deploy",
         ];
 
         var engine = new RuleEngine(DefaultRules.All);
@@ -485,9 +561,14 @@ public sealed class ReclaimTests
         foreach (var path in forbidden) tree.File(path + @"\x.bin", 4 << 20);
 
         var built = tree.Build();
+        // A deleting rule that claims a parent deletes the forbidden path with it; dev.git_gc
+        // claiming .git only names git gc.
         var matched = engine.Match(built)
+            .Where(m => forbidden.Any(f =>
+                m.Path.StartsWith(f, StringComparison.OrdinalIgnoreCase)
+                || (m.Rule.Action == ReclaimAction.Delete
+                    && f.StartsWith(m.Path + @"\", StringComparison.OrdinalIgnoreCase))))
             .Select(m => m.Path)
-            .Where(p => forbidden.Any(f => p.StartsWith(f, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         Assert.Empty(matched);

@@ -27,9 +27,16 @@ The Reclaim tab, in the window.
   rather than added to it. It ends in the id of the scan the numbers came from, and over a
   scan that was stopped early the tab says so: what was not read is not listed, so every
   number is a floor.
-- The rules run on a worker, so the tab opens at once and says *Applying 31 rules…* until
+- The rules run on a worker, so the tab opens at once and says *Applying 36 rules…* until
   they are done: from the key to the list is under a second on a 1.2M-file snapshot,
   loading the snapshot included.
+- **Five rules for a JavaScript and Solana machine.** `dev.bun_cache` (bun's global cache),
+  `dev.next` (a `.next` beside a `package.json`), `dev.playwright_browsers`
+  (`%LOCALAPPDATA%\ms-playwright`), `dev.solana_tools` (the platform tools in
+  `~\.cache\solana`, a copy per version) and `dev.rustup_toolchains`, which only reports
+  and names `rustup toolchain uninstall`. `dev.cargo` also takes Solana's
+  `target\sbpf-solana-solana` and `target\sbf-solana-solana`, and never `target\deploy`,
+  where the program keypairs live. 36 rules now.
 
 ### Fixed
 
@@ -44,8 +51,8 @@ The Reclaim tab, in the window.
 Audit and duplicates are still the commands and the terminal screens, and the window has no
 delete dialog, which is why its Reclaim tab only reports. The rest is unchanged from 0.2.2.
 
-402 tests; ten of the new ones drive the Reclaim tab through the shell and two hold the
-scan card's lines clear of its button.
+406 tests; ten of the new ones drive the Reclaim tab through the shell, two hold the
+scan card's lines clear of its button, and four pin the new rules.
 
 ## [0.2.2] — 2026-09-22
 

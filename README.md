@@ -572,6 +572,9 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `dev.npm_cache` | `%LOCALAPPDATA%\npm-cache`, `~\.npm\_cacache` | Safe | Redownload | `npm cache clean --force` |
 | `dev.pnpm_store` | `%LOCALAPPDATA%\pnpm\store` | Safe | Redownload | `pnpm store prune` |
 | `dev.yarn_cache` | `%LOCALAPPDATA%\Yarn\Cache` | Safe | Redownload | `yarn cache clean` |
+| `dev.bun_cache` | `~\.bun\install\cache` | Safe | Redownload | `bun pm cache rm` |
+| `dev.next` | `**\.next` with a sibling `package.json` | Safe | Rebuild | delete; `next build` restores |
+| `dev.playwright_browsers` | `%LOCALAPPDATA%\ms-playwright` | Safe | Redownload | `npx playwright uninstall --all` |
 | `dev.nuget` | `~\.nuget\packages`, `%LOCALAPPDATA%\NuGet\v3-cache` | Safe | Redownload | `dotnet nuget locals all --clear` |
 | `dev.dotnet_artifacts` | `**\bin\{Debug,Release}`, `**\obj` | Safe | Rebuild | delete |
 | `dev.gradle` | `~\.gradle\caches` | Safe | Redownload | `gradle --stop`, then delete |
@@ -579,7 +582,9 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `dev.pip_cache` | `%LOCALAPPDATA%\pip\Cache` | Safe | Redownload | `pip cache purge` |
 | `dev.pycache` | `**\__pycache__`, `**\*.pyc` | Safe | Rebuild | delete |
 | `dev.venv` | `**\.venv`, `**\venv` | Safe | Rebuild | delete; `pip install -r` restores |
-| `dev.cargo` | `~\.cargo\registry`, `**\target\{debug,release}` | Safe | Rebuild | `cargo clean` |
+| `dev.cargo` | `~\.cargo\registry`, `**\target\{debug,release,sbpf-solana-solana,sbf-solana-solana}` | Safe | Rebuild | `cargo clean` |
+| `dev.rustup_toolchains` | `~\.rustup\toolchains` | Caution | Redownload | **`rustup toolchain uninstall <old>`** — never delete by hand |
+| `dev.solana_tools` | `~\.cache\solana` | Safe | Redownload | delete; `cargo build-sbf --force-tools-install` restores |
 | `dev.go_modcache` | `~\go\pkg\mod` | Safe | Redownload | `go clean -modcache` |
 | `dev.conda_pkgs` | `**\{anaconda3,miniconda3}\pkgs` | Safe | Redownload | `conda clean --all` |
 | `dev.unity_library` | `**\Library\ArtifactDB` with a sibling `Assets\` | Safe | Rebuild | delete (slow reimport) |
@@ -602,7 +607,7 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 
 \* `Redownload` with the caveat "unless it's a license-bound installer".
 
-**Deliberately not rules:** `hiberfil.sys`, `pagefile.sys`, `swapfile.sys` — in use and undeletable; they are an `AuditFinding` with a `powercfg` command. `WinSxS` — deleting it by hand breaks the system irreversibly; `DISM` only. `C:\Windows\Installer` — breaks uninstall and updates; report only. `System Volume Information` — VSS API only. `.git\objects` — destroys the repository; `git gc` only.
+**Deliberately not rules:** `hiberfil.sys`, `pagefile.sys`, `swapfile.sys` — in use and undeletable; they are an `AuditFinding` with a `powercfg` command. `WinSxS` — deleting it by hand breaks the system irreversibly; `DISM` only. `C:\Windows\Installer` — breaks uninstall and updates; report only. `System Volume Information` — VSS API only. `.git\objects` — destroys the repository; `git gc` only. A Rust `target\deploy` — holds the Solana program keypairs, which are the addresses the code declares, and a deleted one is an address nobody can deploy to again; only the SBF build directories beside it are rules.
 
 ### 7.3. Estimating the gain
 
