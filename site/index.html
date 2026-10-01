@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pathmemo: where your disk went, and what is safe to free</title>
+    <meta name="description" content="A disk space screener for Windows in one exe. It shows where the space went, finds what a folder scan cannot see, and frees caches the vendor's own way" />
+    <meta name="theme-color" content="#0e121a" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="pathmemo: where your disk went" />
+    <meta property="og:description" content="A disk space screener for Windows in one exe. Honest numbers, the space a scan cannot see, and the vendor's own cleanup command" />
+    <meta property="og:image" content="%VITE_SITE_URL%/og.png" />
+    <meta property="og:url" content="%VITE_SITE_URL%/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="pathmemo: where your disk went" />
+    <meta name="twitter:description" content="A disk space screener for Windows in one exe. Honest numbers, the space a scan cannot see, and the vendor's own cleanup command" />
+    <meta name="twitter:image" content="%VITE_SITE_URL%/og.png" />
+    <style>
+      html { background: #0e121a; }
+      #pl {
+        position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+        background: #0e121a; color: #e8edf3;
+        transition: clip-path 0.9s cubic-bezier(0.77, 0, 0.175, 1);
+        clip-path: inset(0 0 0 0);
+      }
+      html.is-ready #pl { clip-path: inset(0 0 100% 0); pointer-events: none; }
+      #pl .pl-in { display: grid; justify-items: center; gap: 22px; }
+      #pl svg { width: 84px; height: 84px; transform: rotate(-90deg); }
+      #pl .pl-rest { stroke: #2b3547; }
+      #pl .pl-fill { stroke: #56d6d6; stroke-dasharray: 0 100; transition: stroke-dasharray 0.25s linear; }
+      #pl .pl-num {
+        font: 500 12px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.14em;
+        color: #8d99ab; font-variant-numeric: tabular-nums;
+      }
+      @media (prefers-reduced-motion: reduce) { #pl { transition: opacity 0.2s; } html.is-ready #pl { clip-path: none; opacity: 0; } }
+    </style>
+  </head>
+  <body>
+    <div id="pl" aria-hidden="true">
+      <div class="pl-in">
+        <svg viewBox="0 0 36 36">
+          <circle class="pl-rest" cx="18" cy="18" r="15.9155" fill="none" stroke-width="5" />
+          <circle class="pl-fill" cx="18" cy="18" r="15.9155" fill="none" stroke-width="5" pathLength="100" />
+        </svg>
+        <span class="pl-num">SCANNING C: <b id="pl-pct">0</b>%</span>
+      </div>
+    </div>
+    <div id="root"></div>
+    <noscript>
+      <style>#pl { display: none; }</style>
+      <p style="padding: 24px; font: 16px/1.5 system-ui, sans-serif; color: #e8edf3">
+        pathmemo is a disk space screener for Windows in one exe. The page needs JavaScript for the disk map; the
+        download is at <a style="color: #56d6d6" href="https://github.com/egorb2302/pathmemo/releases">github.com/egorb2302/pathmemo/releases</a>
+      </p>
+    </noscript>
+    <script>
+      setTimeout(function () { document.documentElement.classList.add('is-ready') }, 15000)
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

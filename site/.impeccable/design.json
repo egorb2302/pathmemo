@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-01T12:00:00Z",
+  "title": "Design System: pathmemo",
+  "extensions": {
+    "colorMeta": {
+      "ground": { "role": "neutral", "displayName": "Night Ground", "canonical": "#0e121a", "tonalRamp": ["#0a0d13", "#0e121a", "#121722", "#1a2130", "#232c3c", "#3a465c", "#8d99ab", "#e8edf3"] },
+      "safe-cyan": { "role": "primary", "displayName": "Safe Cyan", "canonical": "#56d6d6", "tonalRamp": ["#0f3a3a", "#165a5a", "#1f7a7a", "#2c9a9a", "#3fbcbc", "#56d6d6", "#7fe4e4", "#c4f3f3"] },
+      "text": { "role": "neutral", "displayName": "Cold Paper Text", "canonical": "#e8edf3", "tonalRamp": ["#3a465c", "#5b677a", "#8d99ab", "#b9c3d0", "#e8edf3"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Hero and download headlines, Archivo at 62% width, 800, uppercase." },
+      "headline": { "displayName": "Headline", "purpose": "Section titles, 66% width." },
+      "title": { "displayName": "Title", "purpose": "Card headings and wordmark, 85% width." },
+      "figure": { "displayName": "Figure", "purpose": "Sizes and deltas, 70% width, tabular numerals." },
+      "body": { "displayName": "Body", "purpose": "Reading text, normal width." },
+      "label": { "displayName": "Label", "purpose": "Martian Mono for paths, commands, captions, rule ids." }
+    },
+    "shadows": [
+      { "name": "tooltip-lift", "value": "0 18px 40px -18px rgba(0, 0, 0, 0.8)", "purpose": "Lifts the map tooltip off the blocks." },
+      { "name": "shot-frame", "value": "0 40px 80px -40px rgba(0, 0, 0, 0.9)", "purpose": "Screenshot frame in the faces section." },
+      { "name": "btn-glow", "value": "0 10px 24px -12px rgba(86, 214, 214, 0.55)", "purpose": "Primary button hover." }
+    ],
+    "motion": [
+      { "name": "ease-reveal", "value": "cubic-bezier(0.19, 1, 0.22, 1)", "purpose": "Entrances and open states." },
+      { "name": "ease-hide", "value": "cubic-bezier(0.77, 0, 0.175, 1)", "purpose": "Exits and close states." },
+      { "name": "ease-out", "value": "cubic-bezier(0.215, 0.61, 0.355, 1)", "purpose": "Hover micro-states, 150ms and 300ms." },
+      { "name": "ease-quint", "value": "cubic-bezier(0.23, 1, 0.32, 1)", "purpose": "Button lift and nav underline." }
+    ],
+    "breakpoints": [
+      { "name": "narrow-map", "value": "640px" },
+      { "name": "mobile", "value": "760px" },
+      { "name": "stack", "value": "960px" },
+      { "name": "map-stack", "value": "1023px" },
+      { "name": "ledger", "value": "1200px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Cyan Download action.",
+      "html": "<a class=\"ds-btn\" href=\"#\">Download for Windows</a>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;height:46px;padding:0 20px;background:#56d6d6;color:#0e121a;font:650 15px 'Archivo Variable',system-ui,sans-serif;text-decoration:none;border-radius:2px;transition:transform .3s cubic-bezier(.23,1,.32,1),background-color .3s,box-shadow .3s}.ds-btn:hover{background:#7fe4e4;transform:translateY(-2px);box-shadow:0 10px 24px -12px rgba(86,214,214,.55)}.ds-btn:active{transform:none;box-shadow:none}.ds-btn:focus-visible{outline:2px solid #56d6d6;outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary download (arm64) in the download section.",
+      "html": "<a class=\"ds-btn-ghost\" href=\"#\">arm64 build</a>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;height:58px;padding:0 26px;background:transparent;color:#e8edf3;font:650 17px 'Archivo Variable',system-ui,sans-serif;text-decoration:none;border-radius:2px;box-shadow:inset 0 0 0 1.5px #2b3547;transition:background-color .3s,box-shadow .3s}.ds-btn-ghost:hover{background:rgba(232,237,243,.04);box-shadow:inset 0 0 0 1.5px #e8edf3}.ds-btn-ghost:focus-visible{outline:2px solid #56d6d6;outline-offset:2px}"
+    },
+    {
+      "name": "Command Chip",
+      "kind": "chip",
+      "refersTo": "command-chip",
+      "description": "Click-to-copy vendor command.",
+      "html": "<button class=\"ds-cmd\"><code>npm cache clean --force</code><span>copy</span></button>",
+      "css": ".ds-cmd{display:inline-flex;align-items:center;gap:14px;padding:8px 10px 8px 12px;background:#121722;border:1px solid #2b3547;border-radius:2px;cursor:copy;color:#e8edf3;transition:border-color .3s}.ds-cmd code{font:11.5px 'Martian Mono Variable',Consolas,monospace}.ds-cmd span{font:9.5px 'Martian Mono Variable',Consolas,monospace;letter-spacing:.1em;text-transform:uppercase;color:#8d99ab}.ds-cmd:hover{border-color:#56d6d6}.ds-cmd:hover span{color:#56d6d6}.ds-cmd:focus-visible{outline:2px solid #56d6d6;outline-offset:2px}"
+    },
+    {
+      "name": "Safe Block",
+      "kind": "custom",
+      "refersTo": "text-cell",
+      "description": "Treemap leaf with the cyan safe fill: name, size.",
+      "html": "<div class=\"ds-block\"><span class=\"n\">npm-cache</span><span class=\"s\">5.2 GB</span></div>",
+      "css": ".ds-block{display:flex;flex-direction:column;justify-content:space-between;width:180px;height:110px;padding:8px 9px;background:#56d6d6;color:#0e121a}.ds-block .n{font:10.5px 'Martian Mono Variable',Consolas,monospace}.ds-block .s{font:800 34px/0.9 'Archivo Variable',system-ui,sans-serif;font-stretch:70%;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Caution Block",
+      "kind": "custom",
+      "refersTo": "text-cell",
+      "description": "Treemap leaf with the cyan hatch: caution or reported only.",
+      "html": "<div class=\"ds-caution\"><span class=\"n\">rustup</span><span class=\"s\">3.8 GB</span></div>",
+      "css": ".ds-caution{display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;width:180px;height:110px;padding:8px 9px;background:repeating-linear-gradient(135deg,rgba(86,214,214,.62) 0 2px,transparent 2px 9px),#1b2535;color:#e8edf3}.ds-caution span{padding:2px 5px;background:#121924}.ds-caution .n{font:10.5px 'Martian Mono Variable',Consolas,monospace}.ds-caution .s{font:800 34px/0.9 'Archivo Variable',system-ui,sans-serif;font-stretch:70%}"
+    },
+    {
+      "name": "Nav Link",
+      "kind": "nav",
+      "refersTo": "text-cell",
+      "description": "Top bar link with cyan scaling underline.",
+      "html": "<a class=\"ds-nav\" href=\"#\">Reclaim</a>",
+      "css": ".ds-nav{position:relative;font:550 14px 'Archivo Variable',system-ui,sans-serif;letter-spacing:.01em;color:#b9c3d0;text-decoration:none;transition:color .3s}.ds-nav::after{content:'';position:absolute;left:0;right:0;bottom:-6px;height:1px;background:#56d6d6;transform:scaleX(0);transform-origin:right;transition:transform .45s cubic-bezier(.23,1,.32,1)}.ds-nav:hover{color:#e8edf3}.ds-nav:hover::after{transform:scaleX(1);transform-origin:left}.ds-nav:focus-visible{outline:2px solid #56d6d6;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Disk Itself",
+    "overview": "The page is the disk. A squarified treemap of one developer's real C: drive (scan 12, 191 GB) fills the first viewport edge to edge, and the product's reclaim pass is shown as light: cyan blocks are what is safe to free, everything else stays slate. The page below the map keeps the same grammar: flat slate blocks on a night ground, separated by 2px gutters, with data set in monospace.",
+    "keyCharacteristics": [
+      "Treemap world: rectangles, gutters, areas proportional to gigabytes",
+      "One meaning colour: cyan equals safe to free",
+      "Condensed uppercase display type against calm text and monospace data",
+      "Flat tonal layering, almost no shadow",
+      "Square corners, 2px gutters as the only separator in dense areas"
+    ],
+    "rules": [
+      { "name": "The One Meaning Rule", "body": "Cyan means safe to free and nothing else, apart from the primary action (Download) and the scrollbar. No second hue is introduced for any state, category or decoration.", "section": "colors" },
+      { "name": "The Hatch Rule", "body": "Caution or reported-only is cyan hatching on a slate fill. Hatched never reads as solid, so caution can not be confused with safe.", "section": "colors" },
+      { "name": "The Slate Is Everything Else Rule", "body": "Whatever carries no verdict stays in the slate steps, with no tinting by category.", "section": "colors" },
+      { "name": "The Mono Is Data Rule", "body": "Martian Mono appears only where the tool itself would print: paths, sizes in captions, commands, rule ids, scan conditions.", "section": "typography" },
+      { "name": "The Narrow Is Loud Rule", "body": "The condensed width axis is for display, figures and sizes only. Reading text stays at normal width.", "section": "typography" },
+      { "name": "The Gutter Is The Border Rule", "body": "Blocks are separated by a 2px gap of ground colour, not by outlines or shadows.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use cyan (#56d6d6) only for safe-to-free, the primary Download action and the scrollbar.",
+      "Do show caution as cyan hatching on slate, never as solid cyan or a second hue.",
+      "Do separate blocks with 2px ground gutters and keep corners at 0 (2px on buttons and chips).",
+      "Do set display and figures in Archivo at 62 to 70% width, weight 750 to 800; set paths, sizes in captions and commands in Martian Mono.",
+      "Do carry every figure with its scan and condition, and use tabular numerals for sizes.",
+      "Do end visible text blocks without a final period, and write without em or en dashes.",
+      "Do keep a custom cyan scrollbar and honor reduced motion by showing final states."
+    ],
+    "donts": [
+      "Don't add a second accent hue for status, categories or decoration.",
+      "Don't put Martian Mono on prose or headings, or condensed width on body text.",
+      "Don't add cards with outlines or drop shadows; depth comes from slate steps and gutters.",
+      "Don't replace the treemap hero with a headline beside a terminal screenshot above a feature grid.",
+      "Don't invent numbers: users, stars, downloads or benchmarks are absent from the product."
+    ]
+  }
+}

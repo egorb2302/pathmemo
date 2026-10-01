@@ -3,6 +3,8 @@
 **Disk space screener for Windows.** One `.exe`, no installer. Finds where the space went, and frees it safely.
 Double-click it for a window; type it for a command line. The same one file does both.
 
+**Site:** [pathmemo.pages.dev](https://pathmemo.pages.dev) — the treemap of a real scan, the reclaim rules with their commands, and the download.
+
 **Spec version:** 3.0
 **Target:** Windows 10 1809+ / Windows 11 (x64 and arm64, separate binaries)
 **Language:** English throughout — CLI, TUI, logs, exports, and this document.
@@ -1820,6 +1822,8 @@ git push origin v0.2.0
 `workflow_dispatch` builds the same archives without creating a release, for testing the pipeline.
 
 **winget points at the release, it does not host anything.** `packaging\winget\manifests\` mirrors the layout of `microsoft/winget-pkgs`, one folder per version, and a release reaches winget as a pull request that copies that folder there. The zip is a `portable` package: winget unpacks it, links `pathmemo` onto the `PATH`, and removes both on uninstall. The hashes in the installer manifest are the ones in that release's `SHA256SUMS.txt`, and `winget validate --manifest <folder>` checks the files before the pull request does. A new release needs a new folder; the old one is the template.
+
+**The site is in `site\` and is not part of the build.** A static React page, published to Cloudflare Pages as the project `pathmemo` at [pathmemo.pages.dev](https://pathmemo.pages.dev). Its figures come from real runs of this tool, recorded in `site\PRODUCT.md`, so a release that changes them — the rule count, a measurement — means updating `site\src\data\` too. Publishing is `npm run build`, then `wrangler pages deploy dist --project-name pathmemo --branch master`; nothing in the release workflow touches it.
 
 **There is no code signature.** An unsigned exe downloaded from the internet carries a mark of the web, and SmartScreen shows "Windows protected your PC" with *More info → Run anyway*. The release notes say so plainly. An OV/EV certificate costs money and a reputation built from downloads; until then, the checksum is the answer.
 
