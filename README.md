@@ -1819,6 +1819,8 @@ git push origin v0.2.0
 
 `workflow_dispatch` builds the same archives without creating a release, for testing the pipeline.
 
+**winget points at the release, it does not host anything.** `packaging\winget\manifests\` mirrors the layout of `microsoft/winget-pkgs`, one folder per version, and a release reaches winget as a pull request that copies that folder there. The zip is a `portable` package: winget unpacks it, links `pathmemo` onto the `PATH`, and removes both on uninstall. The hashes in the installer manifest are the ones in that release's `SHA256SUMS.txt`, and `winget validate --manifest <folder>` checks the files before the pull request does. A new release needs a new folder; the old one is the template.
+
 **There is no code signature.** An unsigned exe downloaded from the internet carries a mark of the web, and SmartScreen shows "Windows protected your PC" with *More info → Run anyway*. The release notes say so plainly. An OV/EV certificate costs money and a reputation built from downloads; until then, the checksum is the answer.
 
 ### 19.4. NativeAOT — a Phase 3 goal
