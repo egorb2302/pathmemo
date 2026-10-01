@@ -319,6 +319,7 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
 
   const back = useCallback(() => {
     if (focus.length > 1) go(focus.slice(0, -1))
+    else refocus.current = false
   }, [focus, go])
 
   const groupPath = (g: Rect) => [
@@ -471,7 +472,10 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
             className="map-group"
             tabIndex={-1}
             style={{ left: g.x0, top: g.y0, width: g.x1 - g.x0, height: g.y1 - g.y0 }}
-            onClick={() => go(groupPath(g), g)}
+            onClick={(e) => {
+              refocus.current = e.detail === 0
+              go(groupPath(g), g)
+            }}
             aria-label={`Open ${g.data.name}, ${gb(g.value ?? 0)}`}
           >
             {g.x1 - g.x0 > 96 && !(size.w < 640 && g.depth > 1) && (
