@@ -262,7 +262,10 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
   const go = useCallback(
     (target: string[], from?: Rect) => {
       const layer = layerRef.current
-      if (!layer || !p || busy.current || target.join('\\') === focus.join('\\')) return
+      if (!layer || !p || busy.current || target.join('\\') === focus.join('\\')) {
+        refocus.current = false
+        return
+      }
       setHover(null)
       pinned.current = null
       gsap.killTweensOf(layer)
@@ -331,7 +334,10 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (pinned.current) unpin()
-      else back()
+      else {
+        refocus.current = !!boxRef.current?.contains(document.activeElement)
+        back()
+      }
     }
     const onDown = (e: PointerEvent) => {
       if (pinned.current && !(e.target as Element).closest?.('[data-block]')) unpin()
@@ -393,7 +399,7 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
   }
 
   useEffect(() => {
-    if (!keyboard.current) return
+    if (!keyboard.current || !layerRef.current?.contains(document.activeElement)) return
     const el = layerRef.current?.querySelectorAll<HTMLElement>('[data-block]')[active]
     el?.focus()
   }, [active])
@@ -437,7 +443,10 @@ export function Treemap({ ready, onReclaimProgress, cell }: Props) {
           type="button"
           className="crumb"
           disabled={i === focus.length - 1}
-          onClick={() => go(focus.slice(0, i + 1))}
+          onClick={(e) => {
+            refocus.current = e.detail === 0
+            go(focus.slice(0, i + 1))
+          }}
         >
           {name}
         </button>

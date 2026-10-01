@@ -54,6 +54,7 @@ function finish() {
       document.documentElement.classList.add('is-ready')
       window.dispatchEvent(new Event('app:ready'))
     }
+    lenis?.start()
   }, wait)
 }
 
