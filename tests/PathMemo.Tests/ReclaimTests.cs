@@ -204,8 +204,8 @@ public sealed class ReclaimTests
 
         Assert.Equal(@"C:\work\prog\target\release", Assert.Single(Group(report, "dev.cargo")!.Matches).Path);
         Assert.Equal(home + @"\.cargo\registry", Assert.Single(Group(report, "dev.cargo_registry")!.Matches).Path);
-        Assert.Null(DefaultRules.ById("dev.cargo")!.Command);
-        Assert.Null(DefaultRules.ById("dev.cargo_registry")!.Command);
+        Assert.DoesNotContain(DefaultRules.All,
+            r => r.Command?.Contains("cargo clean", StringComparison.OrdinalIgnoreCase) == true);
     }
 
     [Fact]

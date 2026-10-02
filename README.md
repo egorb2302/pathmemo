@@ -44,7 +44,7 @@ Administrator rights are optional but change what the tool can see: with them th
 | P10 | Polish, NativeAOT | **done** — lazy snapshot sections brought the TUI to **135 MB** against a 150 MB budget; `errors` / `export` / `config` finish §13; NativeAOT compiles clean but cannot be linked on the build machine (§19.4) |
 | P11 | GUI: own Win32 window, treemap, background scan | **done** — 126 MB and no trimming is what a framework would have cost, so the window is drawn by the same hand as the TUI (§24) |
 
-406 tests green — and green on a CI runner, which is a different claim and was not true until the elevation seam of §22.5. Ten of them drive the window's Reclaim tab through the shell, from the frame drawn while the rules are still running to the way back out of a rule, and two more hold the scan card's lines clear of its button, which a screenshot found and no test had looked for (§24.3, §24.6). Four pin the rules 0.2.3 added (§7.2), one of them that a Rust `target\deploy` and its program keypairs stay out of every rule. Two are new to 0.2.2 and exist because the one test that compared the two scanners had never run; when it finally did, it found the walk reporting logical sizes as allocated ones — 3 GB on this machine's C:, and the syscall that produced the wrong number was costing a scan three quarters of its time (§22.5). Six more came with 0.2.1, because v0.2.0 shipped a window that could not be navigated on a machine with nothing scanned yet: clicking **Tree**, or a volume card, sent two methods calling each other until the stack ran out (§24.6). Everything around that code was tested; those five lines were the only ones that needed a window, so they were the only ones that were not.
+408 tests green — and green on a CI runner, which is a different claim and was not true until the elevation seam of §22.5. Ten of them drive the window's Reclaim tab through the shell, from the frame drawn while the rules are still running to the way back out of a rule, and two more hold the scan card's lines clear of its button, which a screenshot found and no test had looked for (§24.3, §24.6). Four pin the rules 0.2.3 added (§7.2), one of them that a Rust `target\deploy` and its program keypairs stay out of every rule; two from 0.2.4 keep the Cargo registry and VS Code's extension packages in rules of their own, and keep `cargo clean`, which would take `target\deploy` with it, out of every rule's advice. Two are new to 0.2.2 and exist because the one test that compared the two scanners had never run; when it finally did, it found the walk reporting logical sizes as allocated ones — 3 GB on this machine's C:, and the syscall that produced the wrong number was costing a scan three quarters of its time (§22.5). Six more came with 0.2.1, because v0.2.0 shipped a window that could not be navigated on a machine with nothing scanned yet: clicking **Tree**, or a volume card, sent two methods calling each other until the stack ran out (§24.6). Everything around that code was tested; those five lines were the only ones that needed a window, so they were the only ones that were not.
 
 **Known limitations.** Unelevated, the walk scanner runs: some paths are unreadable, hard-link dedup covers only files ≥ 1 MB (WinSxS overstated by ~1.5 GB), ADS are not counted. Elevation removes all three. An incremental rescan needs elevation too, because reading the change journal does — unelevated, every scan is a full one, and `doctor` says so (§4.5.1). `diff` needs two full snapshots and warns when they came from different scanners, because part of the difference is then the scanners, not the disk. `reclaim` counts a multiply-linked file as shared rather than reclaimable, because `.pmsnap` v1 carries no file identity — the number understates rather than overstates (§7.5). `dupes` reads the candidate files themselves, so it is minutes where everything else is seconds; `--estimate` says how many before committing to it, and the hash cache makes the second run cheap (§8.6). The window shows the volumes, the tree and the reclaim report; it reports and does not delete, so `reclaim --apply` and the terminal's screen 4 are still where space is actually freed, and audit and duplicates are still the commands and the terminal screens — each of those tabs says so rather than pretending otherwise (§24.3). The published executable is still a framework-trimmed single file rather than NativeAOT: the code compiles to native with no warnings, but the machine that built this has no platform linker, so the 12 MB / 15 ms figure of §19.4 is a compilation that was never linked.
 
@@ -583,30 +583,30 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `dev.maven` | `~\.m2\repository` | Safe | Redownload | delete |
 | `dev.pip_cache` | `%LOCALAPPDATA%\pip\Cache` | Safe | Redownload | `pip cache purge` |
 | `dev.pycache` | `**\__pycache__`, `**\*.pyc` | Safe | Rebuild | delete |
-| `dev.venv` | `**\.venv`, `**\venv` | Safe | Rebuild | delete; `pip install -r` restores |
+| `dev.venv` | `**\.venv`, `**\venv` with a `pyvenv.cfg` inside | Safe | Rebuild | delete; `pip install -r` restores |
 | `dev.cargo` | `**\target\{debug,release,sbpf-solana-solana,sbf-solana-solana}` | Safe | Rebuild | delete; never a bare `cargo clean` in a Solana project, it takes `target\deploy` too |
 | `dev.cargo_registry` | `~\.cargo\registry` | Safe | Redownload | delete; the next build downloads what it needs |
 | `dev.rustup_toolchains` | `~\.rustup\toolchains` | Caution | Redownload | **`rustup toolchain uninstall <old>`** — never delete by hand |
 | `dev.solana_tools` | `~\.cache\solana` | Safe | Redownload | delete; `cargo build-sbf --force-tools-install` restores |
 | `dev.go_modcache` | `~\go\pkg\mod` | Safe | Redownload | `go clean -modcache` |
 | `dev.conda_pkgs` | `**\{anaconda3,miniconda3}\pkgs` | Safe | Redownload | `conda clean --all` |
-| `dev.unity_library` | `**\Library\ArtifactDB` with a sibling `Assets\` | Safe | Rebuild | delete (slow reimport) |
+| `dev.unity_library` | `**\Library` with an `ArtifactDB` inside and a sibling `Assets\` | Safe | Rebuild | delete (slow reimport) |
 | `dev.unreal_ddc` | `**\DerivedDataCache`, `**\Intermediate`, `**\Saved\Autosaves` | Safe | Rebuild | delete |
 | `dev.git_gc` | `**\.git` where `objects` > 500 MB | **Caution** | **Irreversible** | **`git gc --prune=now`** — never delete `objects` directly |
-| `dev.docker` | Docker vhdx | Caution | Redownload | `docker system prune -a --volumes` |
+| `dev.docker` | `%LOCALAPPDATA%\Docker\wsl\**\*.vhdx`, `**\DockerDesktopWSL\**\*.vhdx` | Caution | Redownload | `docker system prune -a --volumes` |
 | `dev.vs_artifacts` | `**\.vs` | Safe | Instant | delete |
 | `dev.vscode_vsix_cache` | `**\CachedExtensionVSIXs` | Safe | Redownload | delete |
-| `app.browser_cache` | Chromium `**\User Data\*\Cache*`, `**\GPUCache`; Firefox `**\cache2` | Safe | Instant | delete |
-| `app.electron_cache` | `%APPDATA%\{Slack,discord,Teams,...}\Cache`, `**\ShaderCache` | Safe | Instant | delete |
-| `app.shader_cache` | `%LOCALAPPDATA%\{NVIDIA,AMD,D3DSCache}`, Steam `shadercache` | Safe | Instant | delete |
+| `app.browser_cache` | Chromium `**\User Data\*\Cache*`, `**\GPUCache`, `**\Code Cache`; Firefox `**\cache2` | Safe | Instant | delete |
+| `app.electron_cache` | `%APPDATA%\{Slack,discord,Teams,Signal,Code,Telegram Desktop}\Cache` | Safe | Instant | delete |
+| `app.shader_cache` | `%LOCALAPPDATA%\NVIDIA\{DXCache,GLCache}`, `%LOCALAPPDATA%\AMD\DxCache`, `%LOCALAPPDATA%\D3DSCache`, `**\ShaderCache` (Steam's too) | Safe | Instant | delete |
 | `app.steam_downloading` | `**\steamapps\{downloading,temp}` | Safe | Redownload | delete |
 | `app.adobe_media_cache` | `%APPDATA%\Adobe\Common\Media Cache*` | Safe | Rebuild | delete |
 | `app.apple_backups` | `%APPDATA%\Apple Computer\MobileSync\Backup` | **Caution** | **Irreversible** | manual |
-| `sys.temp` | `%TEMP%`, `%WINDIR%\Temp`, `%LOCALAPPDATA%\Temp` | Safe | Instant | delete |
-| `sys.thumbnails` | `**\Explorer\thumbcache_*.db` | Safe | Instant | delete |
-| `sys.old_logs` | `*.log`, `*.etl` older than 30 days outside `%ProgramData%` | Safe | Irreversible | delete |
+| `sys.temp` | `%TEMP%`, `%WINDIR%\Temp`, `%LOCALAPPDATA%\Temp` | Safe | Instant | delete the contents; the folders stay |
+| `sys.thumbnails` | `**\Explorer\{thumbcache,iconcache}_*.db` | Safe | Instant | delete |
+| `sys.old_logs` | `*.log`, `*.etl` over 1 MB and older than 30 days, outside `%ProgramData%` | Safe | Irreversible | delete |
 | `sys.dumps` | `**\CrashDumps`, `MEMORY.DMP`, `**\Minidump` | Safe | Irreversible | delete |
-| `user.old_installers` | `%USERPROFILE%\Downloads\*.{msi,exe,iso}` older than 90 days | Caution | Redownload* | delete |
+| `user.old_installers` | `%USERPROFILE%\Downloads\**\*.{msi,exe,iso}` over 1 MB and older than 90 days | Caution | Redownload* | delete |
 | `user.large_media` | `*.{iso,vhd,vhdx,img,bak,vmdk}` over 1 GB | Caution | Irreversible | manual |
 
 \* `Redownload` with the caveat "unless it's a license-bound installer".

@@ -281,7 +281,7 @@ internal static class DefaultRules
             Patterns = [@"**\CachedExtensionVSIXs"],
             Risk = Risk.Safe,
             Recoverability = Recoverability.Redownload,
-            What = "VS Code's copies of downloaded extension packages",
+            What = "VS Code's (and its forks') copies of downloaded extension packages",
         },
         new ReclaimRule
         {

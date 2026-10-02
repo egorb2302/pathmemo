@@ -26,7 +26,11 @@ program its address.
   Studio folder. It has its own rule, `dev.vscode_vsix_cache` (safe, redownload);
   `dev.vs_artifacts` keeps `.vs`.
 - README: the release publishes zips, not bare `pathmemo-win-*.exe` files, and a winget
-  install keeps the exe in winget's own packages folder.
+  install keeps the exe in winget's own packages folder. The rules table (§7.2) had drifted
+  from the rules and now matches them again: Unity's `Library` and its two conditions, the
+  shader and Electron cache paths, Chromium's `Code Cache`, Explorer's icon cache, the
+  1 MB floor on old logs and installers, installers in subfolders of Downloads, and
+  `%TEMP%` emptied rather than removed.
 
 ### Changed
 
