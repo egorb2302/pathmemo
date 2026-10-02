@@ -363,7 +363,7 @@ internal static class DefaultRules
         },
         new ReclaimRule
         {
-            // A floor of 1 MB, which README section 7.2 does not state: without one this
+            // A floor of 1 MB: without one this
             // rule matches tens of thousands of two-kilobyte files, and a report nobody
             // can read is the same as no report (README section 7.3).
             Id = "sys.old_logs",

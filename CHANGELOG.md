@@ -29,8 +29,9 @@ program its address.
   install keeps the exe in winget's own packages folder. The rules table (§7.2) had drifted
   from the rules and now matches them again: Unity's `Library` and its two conditions, the
   shader and Electron cache paths, Chromium's `Code Cache`, Explorer's icon cache, the
-  1 MB floor on old logs and installers, installers in subfolders of Downloads, and
-  `%TEMP%` emptied rather than removed.
+  `pyvenv.cfg` that makes a `venv` a virtual environment, Docker's vhdx paths, the
+  1 MB floor on old logs and installers, `git gc` from 500 MB inclusive, installers in
+  subfolders of Downloads, and `%TEMP%` emptied rather than removed.
 
 ### Changed
 

@@ -592,7 +592,7 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `dev.conda_pkgs` | `**\{anaconda3,miniconda3}\pkgs` | Safe | Redownload | `conda clean --all` |
 | `dev.unity_library` | `**\Library` with an `ArtifactDB` inside and a sibling `Assets\` | Safe | Rebuild | delete (slow reimport) |
 | `dev.unreal_ddc` | `**\DerivedDataCache`, `**\Intermediate`, `**\Saved\Autosaves` | Safe | Rebuild | delete |
-| `dev.git_gc` | `**\.git` where `objects` > 500 MB | **Caution** | **Irreversible** | **`git gc --prune=now`** — never delete `objects` directly |
+| `dev.git_gc` | `**\.git` where `objects` is 500 MB or more | **Caution** | **Irreversible** | **`git gc --prune=now`** — never delete `objects` directly |
 | `dev.docker` | `%LOCALAPPDATA%\Docker\wsl\**\*.vhdx`, `**\DockerDesktopWSL\**\*.vhdx` | Caution | Redownload | `docker system prune -a --volumes` |
 | `dev.vs_artifacts` | `**\.vs` | Safe | Instant | delete |
 | `dev.vscode_vsix_cache` | `**\CachedExtensionVSIXs` | Safe | Redownload | delete |
@@ -604,10 +604,10 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `app.apple_backups` | `%APPDATA%\Apple Computer\MobileSync\Backup` | **Caution** | **Irreversible** | manual |
 | `sys.temp` | `%TEMP%`, `%WINDIR%\Temp`, `%LOCALAPPDATA%\Temp` | Safe | Instant | delete the contents; the folders stay |
 | `sys.thumbnails` | `**\Explorer\{thumbcache,iconcache}_*.db` | Safe | Instant | delete |
-| `sys.old_logs` | `*.log`, `*.etl` over 1 MB and older than 30 days, outside `%ProgramData%` | Safe | Irreversible | delete |
+| `sys.old_logs` | `*.log`, `*.etl` of 1 MB or more and older than 30 days, outside `%ProgramData%` | Safe | Irreversible | delete |
 | `sys.dumps` | `**\CrashDumps`, `MEMORY.DMP`, `**\Minidump` | Safe | Irreversible | delete |
-| `user.old_installers` | `%USERPROFILE%\Downloads\**\*.{msi,exe,iso}` over 1 MB and older than 90 days | Caution | Redownload* | delete |
-| `user.large_media` | `*.{iso,vhd,vhdx,img,bak,vmdk}` over 1 GB | Caution | Irreversible | manual |
+| `user.old_installers` | `%USERPROFILE%\Downloads\**\*.{msi,exe,iso}` of 1 MB or more and older than 90 days | Caution | Redownload* | delete |
+| `user.large_media` | `*.{iso,vhd,vhdx,img,bak,vmdk}` of 1 GB or more | Caution | Irreversible | manual |
 
 \* `Redownload` with the caveat "unless it's a license-bound installer".
 
@@ -681,7 +681,7 @@ The live paths into the same file: `pathmemo reclaim --keep <path>`, `--disable 
 - **Matching is a prefilter, not thirty globs per node.** The last segment of each pattern goes into one of three buckets: an exact name (`node_modules`, `obj`), an extension (`*.pyc`, `*.log`), or a wildcard (`Cache*`, `thumbcache_*.db`), and even the last is screened by its literal prefix and suffix before a glob runs. A node's full path is built only for a candidate — 1.2M nodes against 31 rules in a few hundred milliseconds, against several seconds for the obvious implementation (§12.2).
 - **A pattern that ends in an extension is about a file.** `**\*.pyc` under a rule that says `kind: any` does not claim a directory somebody named `weird.pyc`. A rule that really means such a directory says `kind: directory`.
 - **Brace alternation is not in the glob syntax.** The `{Debug,Release}` of §7.2 is written as separate patterns. One more metacharacter buys one line of table and costs every reader of every pattern.
-- **Three built-in rules carry a condition §7.2 only implies.** `dev.unity_library` needs both an `ArtifactDB` inside and an `Assets` beside it, or every directory called `Library` on the disk is a Unity project. `dev.venv` needs a `pyvenv.cfg`, or a folder of holiday videos called `venv` is a virtual environment. `sys.old_logs` has a 1 MB floor that §7.2 does not state: without one it matches tens of thousands of two-kilobyte files, and a report nobody can read is the same as no report.
+- **Three built-in rules carry a condition, and §7.2 states it because it is the point.** `dev.unity_library` needs both an `ArtifactDB` inside and an `Assets` beside it, or every directory called `Library` on the disk is a Unity project. `dev.venv` needs a `pyvenv.cfg`, or a folder of holiday videos called `venv` is a virtual environment. `sys.old_logs` has a 1 MB floor: without one it matches tens of thousands of two-kilobyte files, and a report nobody can read is the same as no report.
 - **`sys.temp` deletes contents, not the directory.** Windows and half the installed software assume `%TEMP%` exists, and the guard refuses the directory itself anyway (§9.3). `contentsOnly` is a rule flag, and the children are read from the live filesystem rather than from a snapshot that may be days old.
 - **Hard links are counted as shared, always.** A file with more than one link keeps its data until the last name goes, so deleting this one may free nothing. Proving the other links are inside the same set needs file identity, which `.pmsnap` v1 does not carry (§5.3). Every multiply-linked file therefore counts as shared, which understates the gain — an underestimate disappoints, an overestimate is a promise of space that never arrives. It is also right far more often than it looks: a pnpm store hard-linked into live projects genuinely frees nothing.
 - **The guard is consulted while the report is built, not afterwards.** One handle per match, a second or so for the few hundred a real disk produces. A recommendation the guard would refuse is worse than no recommendation: it is a number in the total that never comes. A path that has gone since the scan drops out; one the guard refuses stays, with the reason beside it.
