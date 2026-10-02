@@ -11,7 +11,7 @@ Double-click it for a window; type it for a command line. The same one file does
 
 ## Install
 
-Download the zip for your architecture from [Releases](../../releases), unpack it anywhere, run `pathmemo.exe`. Nothing is installed; nothing is written outside `%LOCALAPPDATA%\pathmemo`. The executable is not code-signed, so Windows warns about an unknown publisher: **More info → Run anyway**, or check the published SHA-256 first. What each release contains — and what it cannot do yet — is in [CHANGELOG.md](CHANGELOG.md).
+Download the zip for your architecture from [Releases](../../releases), unpack it anywhere, run `pathmemo.exe`. Nothing is installed, and pathmemo writes nothing outside `%LOCALAPPDATA%\pathmemo`; a winget install keeps the exe itself in winget's own packages folder. The executable is not code-signed, so Windows warns about an unknown publisher: **More info → Run anyway**, or check the published SHA-256 first. What each release contains — and what it cannot do yet — is in [CHANGELOG.md](CHANGELOG.md).
 
 ```
 pathmemo                 # double-click: the window (§24). From a terminal: help
@@ -584,7 +584,8 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `dev.pip_cache` | `%LOCALAPPDATA%\pip\Cache` | Safe | Redownload | `pip cache purge` |
 | `dev.pycache` | `**\__pycache__`, `**\*.pyc` | Safe | Rebuild | delete |
 | `dev.venv` | `**\.venv`, `**\venv` | Safe | Rebuild | delete; `pip install -r` restores |
-| `dev.cargo` | `~\.cargo\registry`, `**\target\{debug,release,sbpf-solana-solana,sbf-solana-solana}` | Safe | Rebuild | `cargo clean` |
+| `dev.cargo` | `**\target\{debug,release,sbpf-solana-solana,sbf-solana-solana}` | Safe | Rebuild | delete; never a bare `cargo clean` in a Solana project, it takes `target\deploy` too |
+| `dev.cargo_registry` | `~\.cargo\registry` | Safe | Redownload | delete; the next build downloads what it needs |
 | `dev.rustup_toolchains` | `~\.rustup\toolchains` | Caution | Redownload | **`rustup toolchain uninstall <old>`** — never delete by hand |
 | `dev.solana_tools` | `~\.cache\solana` | Safe | Redownload | delete; `cargo build-sbf --force-tools-install` restores |
 | `dev.go_modcache` | `~\go\pkg\mod` | Safe | Redownload | `go clean -modcache` |
@@ -593,7 +594,8 @@ Patterns are **globs**, not regex (§12.2). Every rule is data, not code.
 | `dev.unreal_ddc` | `**\DerivedDataCache`, `**\Intermediate`, `**\Saved\Autosaves` | Safe | Rebuild | delete |
 | `dev.git_gc` | `**\.git` where `objects` > 500 MB | **Caution** | **Irreversible** | **`git gc --prune=now`** — never delete `objects` directly |
 | `dev.docker` | Docker vhdx | Caution | Redownload | `docker system prune -a --volumes` |
-| `dev.vs_artifacts` | `**\.vs`, `**\CachedExtensionVSIXs` | Safe | Instant | delete |
+| `dev.vs_artifacts` | `**\.vs` | Safe | Instant | delete |
+| `dev.vscode_vsix_cache` | `**\CachedExtensionVSIXs` | Safe | Redownload | delete |
 | `app.browser_cache` | Chromium `**\User Data\*\Cache*`, `**\GPUCache`; Firefox `**\cache2` | Safe | Instant | delete |
 | `app.electron_cache` | `%APPDATA%\{Slack,discord,Teams,...}\Cache`, `**\ShaderCache` | Safe | Instant | delete |
 | `app.shader_cache` | `%LOCALAPPDATA%\{NVIDIA,AMD,D3DSCache}`, Steam `shadercache` | Safe | Instant | delete |
@@ -1768,9 +1770,9 @@ This project needs **one** complex screen (a virtualised tree), four simple ones
 
 | File | Size | Note |
 |---|---|---|
-| `pathmemo-win-x64.exe` | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) — and **25.70 MB at P10**: three commands, the lazy section reader and the diagnostics hook for 0.12 MB, which is what a codebase with no new dependencies costs - and **25.96 MB at P11**, the entire window for **0.27 MB**, which is the number the whole of §24.2 exists to earn |
-| `pathmemo-win-arm64.exe` | 16–30 MB | separate binary |
-| `pathmemo-win-x64.zip` | **11.9 MB at v0.2.0** | exe + README + LICENSE + CHANGELOG, built by `build\publish.ps1 -Zip`; the arm64 zip is 11.5 MB |
+| `pathmemo.exe` (x64) | **16–30 MB** | measured: 16.1 MB on the P0 skeleton (77.3 MB untrimmed), 19.5 MB at P3, 22.5 MB at P4 (Sqlite with native `e_sqlite3` added 3 MB), 23.0 MB at P5 — the whole TUI fit in 0.3 MB because it has no dependencies — 25.3 MB at P8, of which `System.IO.Hashing` is under 0.1 MB: managed, trimmable, and the reason §8.2 chose it — and **25.57 MB at P9**, all of the change journal and the scheduler for 0.27 MB, because `XDocument` was taken back out again (§18) — and **25.70 MB at P10**: three commands, the lazy section reader and the diagnostics hook for 0.12 MB, which is what a codebase with no new dependencies costs - and **25.96 MB at P11**, the entire window for **0.27 MB**, which is the number the whole of §24.2 exists to earn |
+| `pathmemo.exe` (arm64) | 16–30 MB | separate binary |
+| `pathmemo-<version>-win-x64.zip`, `pathmemo-<version>-win-arm64.zip` | **11.9 MB at v0.2.0** | what a release publishes: the exe + README + LICENSE + CHANGELOG, built by `build\publish.ps1 -Zip`, and `SHA256SUMS.txt` beside them; the arm64 zip is 11.5 MB |
 
 **The icon** (`Resources\app.ico`) is drawn by `build\make-icon.ps1` rather than committed as an unreadable binary: the shape is twelve lines of code, and regenerating it is cheaper than explaining what is inside a blob. Sizes 16–64 are stored as classic DIBs and 128/256 as PNG: the Windows shell understands PNG inside an ICO but GDI+ does **not**, while everything reads the small sizes.
 

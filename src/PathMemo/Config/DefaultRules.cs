@@ -161,17 +161,27 @@ internal static class DefaultRules
         new ReclaimRule
         {
             // Solana's SBF output is named, never the whole target: target\deploy holds the
-            // program keypairs, which are the addresses the code declares.
+            // program keypairs, which are the addresses the code declares. No command for
+            // the same reason: a bare cargo clean deletes the whole target, deploy included.
             Id = "dev.cargo",
             Patterns =
             [
-                @"~\.cargo\registry", @"**\target\debug", @"**\target\release",
+                @"**\target\debug", @"**\target\release",
                 @"**\target\sbpf-solana-solana", @"**\target\sbf-solana-solana",
             ],
             Risk = Risk.Safe,
             Recoverability = Recoverability.Rebuild,
-            What = "Rust registry and build output",
-            Command = "cargo clean",
+            What = "Rust build output",
+        },
+        new ReclaimRule
+        {
+            // No command: cargo clean works on a project's target and never touches the
+            // registry, and the registry's own garbage collection is still unstable.
+            Id = "dev.cargo_registry",
+            Patterns = [@"~\.cargo\registry"],
+            Risk = Risk.Safe,
+            Recoverability = Recoverability.Redownload,
+            What = "Cargo's downloaded crates and registry index",
         },
         new ReclaimRule
         {
@@ -260,10 +270,18 @@ internal static class DefaultRules
         new ReclaimRule
         {
             Id = "dev.vs_artifacts",
-            Patterns = [@"**\.vs", @"**\CachedExtensionVSIXs"],
+            Patterns = [@"**\.vs"],
             Risk = Risk.Safe,
             Recoverability = Recoverability.Instant,
             What = "Visual Studio's per-solution state",
+        },
+        new ReclaimRule
+        {
+            Id = "dev.vscode_vsix_cache",
+            Patterns = [@"**\CachedExtensionVSIXs"],
+            Risk = Risk.Safe,
+            Recoverability = Recoverability.Redownload,
+            What = "VS Code's copies of downloaded extension packages",
         },
         new ReclaimRule
         {

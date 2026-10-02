@@ -192,6 +192,39 @@ public sealed class ReclaimTests
     }
 
     [Fact]
+    public void The_cargo_registry_is_its_own_rule_and_no_rust_rule_advises_cargo_clean()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var tree = new TestTree()
+            .File(home + @"\.cargo\registry\cache\index.crates.io-1949cf8c6b5b557f\serde-1.0.228.crate", 80 << 20)
+            .File(@"C:\work\prog\target\release\prog.exe", 40 << 20)
+            .Build();
+
+        var report = Plan(tree, [DefaultRules.ById("dev.cargo")!, DefaultRules.ById("dev.cargo_registry")!]);
+
+        Assert.Equal(@"C:\work\prog\target\release", Assert.Single(Group(report, "dev.cargo")!.Matches).Path);
+        Assert.Equal(home + @"\.cargo\registry", Assert.Single(Group(report, "dev.cargo_registry")!.Matches).Path);
+        Assert.Null(DefaultRules.ById("dev.cargo")!.Command);
+        Assert.Null(DefaultRules.ById("dev.cargo_registry")!.Command);
+    }
+
+    [Fact]
+    public void VS_Code_extension_packages_are_not_reported_as_Visual_Studio_state()
+    {
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var tree = new TestTree()
+            .File(appData + @"\Code\CachedExtensionVSIXs\ms-python.python-2026.18.0", 60 << 20)
+            .File(@"C:\work\app\.vs\app\v17\.suo", 8 << 20)
+            .Build();
+
+        var report = Plan(tree, [DefaultRules.ById("dev.vs_artifacts")!, DefaultRules.ById("dev.vscode_vsix_cache")!]);
+
+        Assert.Equal(@"C:\work\app\.vs", Assert.Single(Group(report, "dev.vs_artifacts")!.Matches).Path);
+        Assert.Equal(appData + @"\Code\CachedExtensionVSIXs",
+            Assert.Single(Group(report, "dev.vscode_vsix_cache")!.Matches).Path);
+    }
+
+    [Fact]
     public void Machine_wide_tool_caches_are_found_where_the_tools_keep_them()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

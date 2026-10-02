@@ -7,6 +7,36 @@ Release notes (`build/release-notes.ps1`), so this file is the one place a
 release is described. A build reports the tag it was cut from as
 `pathmemo --version`.
 
+## [0.2.4] — 2026-10-02
+
+Two rules that named the wrong thing, and one piece of advice that could cost a Solana
+program its address.
+
+### Fixed
+
+- **`dev.cargo` advised `cargo clean`.** A bare `cargo clean` deletes the whole `target`,
+  `target\deploy` included, and that folder holds the Solana program keypairs the rule
+  itself is written never to touch. The rule now gives no command: pathmemo deletes only
+  the build directories it lists.
+- **`dev.cargo` also claimed `~\.cargo\registry` and offered `cargo clean` for it,** which
+  never touches the registry. The registry is its own rule now, `dev.cargo_registry`
+  (safe, redownload): the next build fetches what it needs.
+- **VS Code's extension packages were reported as Visual Studio's state.**
+  `CachedExtensionVSIXs` is VS Code's store of downloaded `.vsix` files, not a Visual
+  Studio folder. It has its own rule, `dev.vscode_vsix_cache` (safe, redownload);
+  `dev.vs_artifacts` keeps `.vs`.
+- README: the release publishes zips, not bare `pathmemo-win-*.exe` files, and a winget
+  install keeps the exe in winget's own packages folder.
+
+### Changed
+
+- 38 rules. A `config.json` that disables `dev.cargo` or `dev.vs_artifacts` to keep the
+  registry or the VSIX cache out of the report now needs `dev.cargo_registry` or
+  `dev.vscode_vsix_cache` in `rules.disabled` as well.
+
+408 tests; the two new ones pin the split rules and that no Rust rule advises
+`cargo clean`.
+
 ## [0.2.3] — 2026-10-01
 
 The Reclaim tab, in the window, and five rules for a JavaScript and Solana machine.
