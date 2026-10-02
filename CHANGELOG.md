@@ -30,7 +30,7 @@ program its address.
   from the rules and now matches them again: Unity's `Library` and its two conditions, the
   shader and Electron cache paths, Chromium's `Code Cache`, Explorer's icon cache, the
   `pyvenv.cfg` that makes a `venv` a virtual environment, Docker's vhdx paths, the
-  1 MB floor on old logs and installers, `git gc` from 500 MB inclusive, installers in
+  1 MB floor on old logs and installers, `git gc` from 500 MB and large media from 1 GB inclusive, installers in
   subfolders of Downloads, and `%TEMP%` emptied rather than removed.
 
 ### Changed

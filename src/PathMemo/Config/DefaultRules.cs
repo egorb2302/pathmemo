@@ -363,9 +363,9 @@ internal static class DefaultRules
         },
         new ReclaimRule
         {
-            // A floor of 1 MB: without one this
-            // rule matches tens of thousands of two-kilobyte files, and a report nobody
-            // can read is the same as no report (README section 7.3).
+            // A floor of 1 MB: without one this rule matches tens of thousands of
+            // two-kilobyte files, and a report nobody can read is the same as no report
+            // (README section 7.5).
             Id = "sys.old_logs",
             Patterns = [@"**\*.log", @"**\*.etl"],
             Risk = Risk.Safe,
