@@ -41,11 +41,11 @@ What WizTree, TreeSize and ncdu do not:
 ## Capabilities and Constraints
 
 - Commands: `scan`, `top`, `audit`, `reclaim`, `diff`, `dupes`, `rm` (quarantine by default), `restore`, `purge`, `ops`, `doctor`.
-- Reclaim: 36 rules as data, two independent axes (risk and recovery), the vendor's own cleanup command where one exists.
+- Reclaim: 38 rules as data, two independent axes (risk and recovery), the vendor's own cleanup command where one exists.
 - Deletion: quarantine, operations journal, dry run, path guard against junction tricks. Nothing deleted without an explicit user action, no auto-clean.
 - The window reports and does not delete yet: freeing space is still `reclaim --apply` and the terminal screens.
 - Not a web app, not a "speed-up" tool, no registry cleaning, no cloud, no Linux or macOS.
-- Open source, MIT, free. Repo: github.com/egorb2302/pathmemo. Current version 0.2.3.
+- Open source, MIT, free. Repo: github.com/egorb2302/pathmemo. Current version 0.2.4.
 
 ## Brand Commitments
 
@@ -65,8 +65,8 @@ Real measurements from the README (machine, conditions in the README):
 - Reclaim: 1.2M nodes matched in 2.5 s.
 - Duplicates stage 0: 1.23M files to 8,508 candidates in 0.44 s.
 - Path guard: canary intact after 10k junction-swap races.
-- 406 tests.
-- Real scan of the owner's C: (scan 12, started 2026-09-21 23:17 UTC, 22 Sep local; 191 GB in 1,210,960 files, walk, unelevated), all 36 rules of 0.2.3: 37.6 GB safe to free, 49 GB including caution, 1,777 matches across 21 rules (`pathmemo reclaim --scan 12 --risk caution`, run 2026-10-01). The five rules new in 0.2.3 alone account for 6.7 GB safe (Solana tools 3.14 GB, bun cache 2.81 GB, Playwright browsers 0.71 GB) plus 3.77 GB of Rust toolchains reported only.
+- 408 tests.
+- Real scan of the owner's C: (scan 12, started 2026-09-21 23:17 UTC, 22 Sep local; 191 GB in 1,210,960 files, walk, unelevated), all 36 rules of 0.2.3: 37.6 GB safe to free, 49 GB including caution, 1,777 matches across 21 rules (`pathmemo reclaim --scan 12 --risk caution`, run 2026-10-01). The five rules new in 0.2.3 alone account for 6.7 GB safe (Solana tools 3.14 GB, bun cache 2.81 GB, Playwright browsers 0.71 GB) plus 3.77 GB of Rust toolchains reported only. Re-run with the 38 rules of 0.2.4 (2026-10-02): same totals and the same 21 matching rules; the Cargo registry (375 MB) and VS Code's VSIX cache (862 MB) now show under rules of their own.
 - Space Audit on the same machine, 2026-10-01, unelevated: 41.7 GB across page file, Windows Update cache, temp, hibernation and browser caches.
 - Every figure on the site comes from these runs or the README; nothing is mock. Names on the map are anonymised: the Windows user folder is shown as `you`, and non-developer apps are merged into "other apps".
 - The real window, terminal screens and CLI output can be captured from the shipped exe.

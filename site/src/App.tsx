@@ -140,7 +140,7 @@ function Reclaim() {
     <section className="sec" id="reclaim" aria-labelledby="reclaim-title">
       <SectionHead id="reclaim" title="The vendor's command, not a path to delete">
         <p>
-          36 rules know where developer tools keep their caches. Every match carries what it costs to get back and,
+          38 rules know where developer tools keep their caches. Every match carries what it costs to get back and,
           where the tool ships one, its own cleanup command. Caches that pathmemo should not touch are reported and
           left to their owner
         </p>
@@ -381,7 +381,7 @@ function Faces() {
           decoding="async"
           alt="The pathmemo 0.2.3 window on its Overview tab: C: 91.4% used with 14.8 GB unaccounted by scan 12, D: 63.3% used, the last scan and pathmemo's own data under its 500 MB limit"
         />
-        <figcaption>The window, pathmemo {RELEASE.version} on the same machine, 1 Oct 2026</figcaption>
+        <figcaption>The window, pathmemo 0.2.3 on the same machine, 1 Oct 2026</figcaption>
       </Reveal>
       <div className="term" role="region" aria-label="Commands">
         {COMMANDS.map(([cmd, what]) => (

@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+
+PackageIdentifier: egorb2302.pathmemo
+PackageVersion: 0.2.4
+MinimumOSVersion: 10.0.17763.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: pathmemo.exe
+  PortableCommandAlias: pathmemo
+Commands:
+- pathmemo
+ReleaseDate: 2026-10-02
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/egorb2302/pathmemo/releases/download/v0.2.4/pathmemo-0.2.4-win-x64.zip
+  InstallerSha256: E2D753CD5FF8CB523E1EF2FF8C4D96FB9334D1CA00C0740C088CEF95F01A2A4C
+- Architecture: arm64
+  InstallerUrl: https://github.com/egorb2302/pathmemo/releases/download/v0.2.4/pathmemo-0.2.4-win-arm64.zip
+  InstallerSha256: EC6CBFF61E2FE712CF668C1C8582066F116BBF636A9327A8B74037BC5142E6C9
+ManifestType: installer
+ManifestVersion: 1.10.0

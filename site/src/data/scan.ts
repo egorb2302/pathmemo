@@ -205,11 +205,11 @@ export const AUDIT = {
 }
 
 export const RELEASE = {
-  version: '0.2.3',
-  date: '1 Oct 2026',
+  version: '0.2.4',
+  date: '2 Oct 2026',
   repo: 'https://github.com/egorb2302/pathmemo',
-  x64: 'https://github.com/egorb2302/pathmemo/releases/download/v0.2.3/pathmemo-0.2.3-win-x64.zip',
-  arm64: 'https://github.com/egorb2302/pathmemo/releases/download/v0.2.3/pathmemo-0.2.3-win-arm64.zip',
-  sums: 'https://github.com/egorb2302/pathmemo/releases/download/v0.2.3/SHA256SUMS.txt',
-  x64Sha: 'bbb65a7192ea8afd2aee765cb39918ad8892aef6c1c9d9b002e6372ef2b5eabc',
+  x64: 'https://github.com/egorb2302/pathmemo/releases/download/v0.2.4/pathmemo-0.2.4-win-x64.zip',
+  arm64: 'https://github.com/egorb2302/pathmemo/releases/download/v0.2.4/pathmemo-0.2.4-win-arm64.zip',
+  sums: 'https://github.com/egorb2302/pathmemo/releases/download/v0.2.4/SHA256SUMS.txt',
+  x64Sha: 'e2d753cd5ff8cb523e1ef2ff8c4d96fb9334d1ca00c0740c088cef95f01a2a4c',
 }
